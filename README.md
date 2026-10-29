@@ -6,6 +6,14 @@ A Python library for rhythm chart analysis with a shared `Chart` representation 
 
 Requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
 
+Run the included entry point to load the example chart and start the visualizer:
+
+```sh
+uv run main.py
+```
+
+Or use the library interactively:
+
 ```sh
 uv sync
 uv run python
@@ -65,6 +73,40 @@ for event in all_events:
 `chart.lanes` always has keys `0`, `1`, `2`, `3`, including empty lanes. `chart.events` returns all events in time order. Events retain their source line, object flags, source x coordinate and stable source ID. Simultaneous events stay separate. Holds use the explicit release time in the source file.
 
 Seven-key maps and other game modes raise `ValueError`. Unsupported or malformed objects are retained in `chart.raw_events` with diagnostics, and the metadata reports partial decoding. Events beyond the recording bounds retain their timestamps with `analysis_eligible=False`.
+
+## NumPy descriptors
+
+Pass a loaded chart to the top-level descriptor getters:
+
+```python
+import numpy as np
+
+onsets = cadencia.get_onset_strength(chart, sampling_rate=100)
+rms = cadencia.get_rms_energy(chart, sampling_rate=100)
+chroma = cadencia.get_chroma(chart, sampling_rate=100)
+waveform = cadencia.get_waveform(chart, sampling_rate=22050)
+
+times = np.arange(len(onsets)) / 100
+```
+
+`sampling_rate` is the number of output samples per second. Sample `k` represents `k / sampling_rate` seconds from audio zero, and every timestamp is strictly before the song duration. Getters using the same rate return the same number of samples. Positive fractional rates are supported.
+
+| Getter | Array shape | Default rate |
+| --- | --- | --- |
+| `get_waveform` | `(N,)`, mono audio amplitude | 22,050 Hz |
+| `get_onset_strength` | `(N,)` | 50 Hz |
+| `get_rms_energy` | `(N,)` | 50 Hz |
+| `get_spectral_centroid` | `(N,)` | 50 Hz |
+| `get_harmonic_energy_fraction` | `(N,)` | 50 Hz |
+| `get_chroma` | `(N, 12)`, columns C through B | 50 Hz |
+| `get_candidate_onsets` | `(N,)`, integer counts per bin | 50 Hz |
+| `get_estimated_beats` | `(N,)`, integer counts per bin | 50 Hz |
+
+Continuous descriptors use linear interpolation of cached feature values and hold the endpoint value beyond the last cached frame. A higher output rate interpolates the original 50 Hz analysis; it does not increase its measurement resolution. Undefined centroid and harmonic-fraction values remain `np.nan`, including interpolation intervals touching them. The original cached values and units are preserved.
+
+`get_waveform` reads the original audio, averages channels and resamples with `soxr_hq` antialiasing. It returns audio samples; `chart.waveform` remains the min/max envelope used by the visualizer.
+
+Candidate onsets and estimated beats are discrete event trains. Output bin `k` counts events in `[k / sampling_rate, (k + 1) / sampling_rate)`, clipped to the recording duration. Counts can exceed one at low rates. They are not interpolated into continuous curves, and candidate counts do not encode onset strength.
 
 ## Cache and provenance
 
