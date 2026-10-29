@@ -215,7 +215,7 @@ $("next-note").addEventListener("click",()=>moveNote(1));
     $(id).disabled=!state.include.includes(layer);$(id).checked=!$(id).disabled;
     $(id).parentElement.hidden=$(id).disabled;
   }
-  if(!manifest.songs.length)throw new Error("No charts cached. Load a chart with cadencia.osumania.load_chart(), then refresh.");
+  if(!manifest.songs.length)throw new Error("No charts cached. Run uv run download_ranked_mania.py, then refresh.");
   $("corpus-size").textContent=`${manifest.songs.length} RECORDING${manifest.songs.length===1?"":"S"}`;
   $("song").innerHTML=manifest.songs.map(s=>`<option value="${esc(s.song_id)}">${esc(s.title)}</option>`).join("");$("song").disabled=false;
   const query=new URLSearchParams(location.search),first=manifest.songs.find(s=>s.song_id===query.get("song"))||manifest.songs[0];

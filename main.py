@@ -63,7 +63,7 @@ def main():
     frames = []
     for link in links:
         print(f"Loading {link}", flush=True)
-        frames.append(beat_dataset(cadencia.osumania.load_chart(link)))
+        frames.append(beat_dataset(cadencia.osumania.load_chart(url=link)))
     dataset = pd.concat(frames, ignore_index=True)
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     dataset.to_json(args.output, orient="records", indent=2)

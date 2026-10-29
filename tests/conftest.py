@@ -6,9 +6,16 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from cadencia.osumania import loader
+from cadencia.osumania import HinamizawaClient
 
 LINK = "https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"
+
+
+def ranked_set(*chart_ids):
+    return {"id": 2043161, "status": "ranked", "beatmaps": [
+        {"id": chart_id, "mode": "mania", "cs": 4, "ranked": 1}
+        for chart_id in chart_ids
+    ]}
 
 
 def beatmap(objects, *, keys=4, mode=3, timing="0,500,4,2,1,100,1,0", chart_id=4855704):
@@ -59,11 +66,12 @@ def package(tmp_path):
 def downloaded_chart(tmp_path, package, monkeypatch):
     calls = []
 
-    def download(set_id, destination):
+    def download(self, set_id, destination):
         calls.append(set_id)
         shutil.copyfile(package, destination)
         return {"provider": "local test fixture"}
 
-    monkeypatch.setattr(loader, "_download", download)
+    monkeypatch.setattr(HinamizawaClient, "_download", download)
+    monkeypatch.setattr(HinamizawaClient, "get_ranked_mania", lambda self, params: {"beatmapsets": [ranked_set(4855704)]})
     root = tmp_path / "data"
-    return loader.load_chart(LINK, data_dir=root), root, calls
+    return HinamizawaClient(data_dir=root).download_charts({"count": 1})[0], root, calls

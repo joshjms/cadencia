@@ -6,10 +6,10 @@ A Python library for rhythm chart analysis with a shared `Chart` representation 
 
 Requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
 
-Run the included entry point to load the example chart and start the visualizer:
+Download and preprocess 100 ranked four-key osu!mania charts:
 
 ```sh
-uv run main.py
+uv run download_ranked_mania.py
 ```
 
 Or use the library interactively:
@@ -22,8 +22,12 @@ uv run python
 ```python
 import cadencia
 
-link = "https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"
-chart = cadencia.osumania.load_chart(link)
+client = cadencia.osumania.HinamizawaClient()
+page = client.get_ranked_mania({"limit": 10, "page": 0})
+charts = client.download_charts({
+    "urls": ["https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"]
+})
+chart = cadencia.osumania.load_chart(url=charts[0].metadata["source_url"])
 
 cadencia.osumania.visualize(port="8080")
 ```
@@ -31,7 +35,9 @@ cadencia.osumania.visualize(port="8080")
 Open [the timeline](http://127.0.0.1:8080/). The server blocks until Ctrl+C. Audio playback, seeking, zooming and the event inspector share the same timeline.
 
 ```python
-chart = cadencia.osumania.load_chart(link, download=False)
+chart = cadencia.osumania.load_chart(
+    name=f"{chart.song.artist} - {chart.song.title} [{chart.metadata['difficulty']}]"
+)
 
 cadencia.osumania.visualize(
     port="8080",
@@ -39,7 +45,33 @@ cadencia.osumania.visualize(
 )
 ```
 
-`download=False` raises `FileNotFoundError` when the chart is absent locally. A cached `trace.json` loads without downloading or recomputing features. If only the original archive is present, the library can rebuild the trace locally.
+`load_chart` requires exactly one of `name=` or `url=` and immediately reads an existing local `trace.json`. It never downloads or recomputes features, and raises `FileNotFoundError` if no preprocessed chart exists, even when an original archive is present. Names match an exact song title or `Artist - Title [Difficulty]`, ignoring case. Ambiguous names raise `ValueError`; use the full name or URL to select a difficulty.
+
+## Ranked mania downloads
+
+`HinamizawaClient.get_ranked_mania(params)` makes a GET request to the mirror's [advanced search API](https://mirror.hinamizawa.ai/docs/beatmap-search), returning its JSON object with a `beatmapsets` array and nested `beatmaps` difficulties. It fixes `mode=3` and `status=ranked`, defaults to `explicit=show`, `sort=ranked_asc`, `limit=100`, and zero-based `page=0`. The ranked category includes legacy Approved maps. Search results include all mania key counts.
+
+`HinamizawaClient.download_charts(params)` accepts either an explicit `{"urls": [...]}` selection or the same search filters plus `count` (default 100). It downloads the selected charts' sets and runs chart and audio preprocessing, without silently skipping any key counts. Cadencia's parser still raises `ValueError` for unsupported charts. Four-key filtering and pagination for the 100-chart dataset live in `download_ranked_mania.py`: the script selects individual ranked four-key difficulties and passes their URLs to the client.
+
+The client counts cached charts toward the requested total, reuses their traces, and downloads a set once per call even when it contains multiple selected difficulties. If only an archive exists, the client rebuilds its trace. Search exhaustion, download failures and preprocessing failures raise errors; already processed charts remain available for rerunning the batch. Requests retry HTTP 429 and 5xx responses up to three attempts, honoring `Retry-After` delays up to 60 seconds; longer delays are reported to the caller.
+
+```python
+client = cadencia.osumania.HinamizawaClient(data_dir="data")
+page = client.get_ranked_mania({"query": "Camellia", "limit": 25, "page": 0})
+# Select chart URLs from the search results before downloading.
+charts = client.download_charts({
+    "urls": ["https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"]
+})
+```
+
+The script defaults to 100 charts and logs progress for each processed difficulty:
+
+```sh
+uv run download_ranked_mania.py
+uv run download_ranked_mania.py --count 10 --query Camellia --data-dir /path/to/data
+```
+
+`uv run main.py --manifest links.json` builds a beat dataset from charts already preprocessed locally. Its manifest is a JSON array of objects containing `link` URLs.
 
 Both `include=["lane0", "lane1", "waveform"]` and `include=["lane0, lane1, waveform"]` work. Omitting `include` displays every layer. Available names:
 
@@ -125,7 +157,7 @@ data/osumania/charts/4855704/
 
 Downloads use the [Hinamizawa public beatmap mirror](https://mirror.hinamizawa.ai/docs/beatmap-download). The provider, requested URL, resolved URL and download time are recorded. SHA-256 hashes identify the archive, selected chart and song. Only the requested chart and its associated song are analyzed. Downloads and analysis are staged before a new cache becomes visible.
 
-The default data directory is `data/` relative to the current working directory. Set `CADENCIA_DATA_DIR`, or pass `data_dir="/path/to/data"` to both `load_chart` and `visualize`, to choose another location. Cached media are ignored by version control.
+The default data directory is `data/` relative to the current working directory. Set `CADENCIA_DATA_DIR`, or pass `data_dir="/path/to/data"` to `HinamizawaClient`, `load_chart` and `visualize`, to choose another location. Cached media are ignored by version control.
 
 ## Audio features and timing
 

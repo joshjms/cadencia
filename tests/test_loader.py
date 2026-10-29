@@ -1,4 +1,5 @@
 import json
+import urllib.request
 import zipfile
 
 import numpy as np
@@ -6,7 +7,7 @@ import pytest
 
 import cadencia
 from cadencia.osumania import loader
-from conftest import LINK, beatmap
+from conftest import LINK, beatmap, ranked_set
 
 
 def test_download_analyze_serialize_and_reload(downloaded_chart, monkeypatch):
@@ -46,34 +47,38 @@ def test_download_analyze_serialize_and_reload(downloaded_chart, monkeypatch):
     def unexpected(*args, **kwargs):
         pytest.fail("Cache access attempted a download or audio analysis")
 
-    monkeypatch.setattr(loader, "_download", unexpected)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
     monkeypatch.setattr(loader, "analyze_song", unexpected)
-    for download in [True, False]:
-        cached = cadencia.osumania.load_chart(LINK, download=download, data_dir=root)
+    for params in [{"url": LINK}, {"name": "test recording"}, {"name": "Test artist - Test recording [Hyper]"}]:
+        cached = cadencia.osumania.load_chart(**params, data_dir=root)
         assert cached.to_dict() == chart.to_dict()
     assert calls == [2043161]
 
 
-def test_download_disabled_does_not_create_directories_or_call_network(tmp_path, monkeypatch):
+def test_missing_local_chart_does_not_create_directories_or_call_network(tmp_path, monkeypatch):
     def unexpected(*args):
         pytest.fail("Network access attempted")
 
-    monkeypatch.setattr(loader, "_download", unexpected)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
     root = tmp_path / "missing"
-    with pytest.raises(FileNotFoundError, match="disabled"):
-        cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+    for params in [{"url": LINK}, {"name": "missing"}]:
+        with pytest.raises(FileNotFoundError, match="local"):
+            cadencia.osumania.load_chart(**params, data_dir=root)
     assert not root.exists()
 
 
-def test_existing_archive_rebuilds_offline(downloaded_chart, monkeypatch):
+def test_only_client_rebuilds_existing_archive_offline(downloaded_chart, monkeypatch):
     chart, root, calls = downloaded_chart
     chart.trace_path.unlink()
 
     def unexpected(*args):
         pytest.fail("Existing archive should be reused")
 
-    monkeypatch.setattr(loader, "_download", unexpected)
-    rebuilt = cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+    monkeypatch.setattr(urllib.request, "urlopen", unexpected)
+    with pytest.raises(FileNotFoundError, match="preprocessed"):
+        cadencia.osumania.load_chart(url=LINK, data_dir=root)
+    assert not chart.trace_path.exists()
+    rebuilt = cadencia.osumania.HinamizawaClient(data_dir=root).download_charts({"count": 1})[0]
     assert rebuilt.to_dict() == chart.to_dict()
     assert calls == [2043161]
 
@@ -82,14 +87,16 @@ def test_failed_import_leaves_no_partial_cache(tmp_path, package, monkeypatch):
     with zipfile.ZipFile(package, "a") as archive:
         archive.writestr("duplicate.osu", beatmap("64,192,500,1,0"))
 
-    def download(set_id, destination):
+    def download(self, set_id, destination):
         destination.write_bytes(package.read_bytes())
         return {}
 
-    monkeypatch.setattr(loader, "_download", download)
+    client = cadencia.osumania.HinamizawaClient
+    monkeypatch.setattr(client, "_download", download)
+    monkeypatch.setattr(client, "get_ranked_mania", lambda self, params: {"beatmapsets": [ranked_set(4855704)]})
     root = tmp_path / "data"
     with pytest.raises(ValueError, match="exactly one"):
-        cadencia.osumania.load_chart(LINK, data_dir=root)
+        client(data_dir=root).download_charts({"count": 1})
     assert not list((root / "osumania" / "charts").iterdir())
 
 
@@ -108,11 +115,31 @@ def test_cache_requires_matching_identity_and_present_audio(downloaded_chart):
     trace["metadata"]["beatmapset_id"] = 99
     chart.trace_path.write_text(json.dumps(trace))
     with pytest.raises(ValueError, match="identity"):
-        cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+        cadencia.osumania.load_chart(url=LINK, data_dir=root)
     chart.save()
     chart.song.path.unlink()
     with pytest.raises(FileNotFoundError, match="song"):
-        cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+        cadencia.osumania.load_chart(url=LINK, data_dir=root)
+
+
+@pytest.mark.parametrize("params", [{}, {"name": "x", "url": LINK}, {"name": " "}])
+def test_local_search_requires_one_nonempty_parameter(tmp_path, params):
+    with pytest.raises(ValueError):
+        cadencia.osumania.load_chart(**params, data_dir=tmp_path)
+
+
+def test_ambiguous_local_name_requires_disambiguation(downloaded_chart):
+    chart, root, _ = downloaded_chart
+    trace = chart.to_dict()
+    trace["id"] = 1
+    trace["song"]["path"] = chart.song.path.name
+    trace["metadata"]["difficulty"] = "Another difficulty"
+    folder = chart.trace_path.parent.parent / "1"
+    folder.mkdir()
+    (folder / "trace.json").write_text(json.dumps(trace))
+    with pytest.raises(ValueError, match="Multiple"):
+        cadencia.osumania.load_chart(name="Test recording", data_dir=root)
+    assert cadencia.osumania.load_chart(name="Test artist - Test recording [Hyper]", data_dir=root).id == chart.id
 
 
 def test_link_formats_and_data_directory(tmp_path, monkeypatch):

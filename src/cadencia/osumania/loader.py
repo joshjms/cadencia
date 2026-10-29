@@ -2,20 +2,13 @@ import hashlib
 import json
 import os
 import re
-import shutil
-import tempfile
-import urllib.error
-import urllib.request
 import zipfile
-from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
 
 from ..analysis import analyze_song
 from .chart import Chart
 from .parser import parse_chart, sections, validate_headers
-
-DOWNLOAD_URL = "https://mirror.hinamizawa.ai/api/v1/hinai/d/{set_id}?no_video=true"
 
 
 def data_root(data_dir=None) -> Path:
@@ -30,20 +23,6 @@ def chart_ids(link: str) -> tuple[int, int]:
     if url.scheme != "https" or url.hostname != "osu.ppy.sh" or not path or not fragment:
         raise ValueError("Use an osu!mania link: https://osu.ppy.sh/beatmapsets/<set_id>#mania/<chart_id>")
     return int(path[1]), int(fragment[1])
-
-
-def _download(set_id: int, destination: Path) -> dict:
-    url = DOWNLOAD_URL.format(set_id=set_id)
-    request = urllib.request.Request(url, headers={"User-Agent": "cadencia/0.1.0"})
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            with destination.open("wb") as output:
-                shutil.copyfileobj(response, output)
-            resolved_url = response.url
-    except (urllib.error.URLError, OSError) as error:
-        raise RuntimeError(f"Could not download beatmap set {set_id} from {url}: {error}") from error
-    return dict(download_url=url, resolved_download_url=resolved_url,
-                downloaded_at=datetime.now(timezone.utc).isoformat(), provider="Hinamizawa public beatmap mirror")
 
 
 def _archive_files(archive: zipfile.ZipFile) -> dict[str, str]:
@@ -103,33 +82,42 @@ def _build_chart(folder: Path, set_id: int, chart_id: int, link: str, provenance
     return chart
 
 
-def load_chart(link: str, download: bool = True, *, data_dir=None) -> Chart:
-    set_id, chart_id = chart_ids(link)
-    link = f"https://osu.ppy.sh/beatmapsets/{set_id}#mania/{chart_id}"
-    folder = data_root(data_dir) / "osumania" / "charts" / str(chart_id)
-    trace = folder / "trace.json"
-    if trace.is_file():
+def load_chart(*, name: str | None = None, url: str | None = None, data_dir=None) -> Chart:
+    """Read a preprocessed local chart by URL or case-insensitive exact name.
+
+    Names match a song title or ``Artist - Title [Difficulty]``. Ambiguous
+    titles require the full name or URL. This never downloads or analyzes audio.
+    """
+    if (name is None) == (url is None):
+        raise ValueError("Provide exactly one of name= or url=")
+    charts = data_root(data_dir) / "osumania" / "charts"
+    if url is not None:
+        set_id, chart_id = chart_ids(url)
+        trace = charts / str(chart_id) / "trace.json"
+        if not trace.is_file():
+            raise FileNotFoundError(f"Chart {chart_id} is not preprocessed locally at {trace}")
         chart = Chart.read(trace)
         if chart.id != chart_id or chart.metadata["beatmapset_id"] != set_id:
             raise ValueError("Cached chart identity does not match the requested link")
         return chart
-    archive = folder / "archive.osz"
-    if archive.is_file():
-        provenance_path = folder / "download.json"
-        provenance = json.loads(provenance_path.read_text()) if provenance_path.is_file() else {}
-        return _build_chart(folder, set_id, chart_id, link, provenance)
-    if not download:
-        raise FileNotFoundError(f"Chart {chart_id} is not cached at {folder}; automatic downloads are disabled")
 
-    folder.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=f".{chart_id}-", dir=folder.parent) as temporary:
-        staging = Path(temporary)
-        provenance = _download(set_id, staging / "archive.osz")
-        (staging / "download.json").write_text(json.dumps(provenance, indent=2), encoding="utf-8")
-        _build_chart(staging, set_id, chart_id, link, provenance)
-        if folder.exists():
-            if any(folder.iterdir()):
-                raise FileExistsError(f"Incomplete cache at {folder}; inspect it before retrying")
-            folder.rmdir()
-        staging.rename(folder)
-    return Chart.read(trace)
+    if not name.strip():
+        raise ValueError("name= must not be empty")
+    matches = []
+    for trace in sorted(charts.glob("*/trace.json")):
+        value = json.loads(trace.read_text(encoding="utf-8"))
+        song, metadata = value["song"], value["metadata"]
+        headers = metadata.get("headers", {}).get("Metadata", {})
+        titles = {song["title"], headers.get("Title", ""), headers.get("TitleUnicode", "")}
+        artists = {song["artist"], headers.get("Artist", ""), headers.get("ArtistUnicode", "")}
+        names = titles | {
+            f"{artist} - {title} [{metadata['difficulty']}]"
+            for artist in artists if artist for title in titles if title
+        }
+        if name.strip().casefold() in {candidate.casefold() for candidate in names}:
+            matches.append(trace)
+    if not matches:
+        raise FileNotFoundError(f"No preprocessed local chart named {name!r} in {charts}")
+    if len(matches) > 1:
+        raise ValueError(f"Multiple local charts match {name!r}; use url= or Artist - Title [Difficulty]")
+    return Chart.read(matches[0])

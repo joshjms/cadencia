@@ -8,9 +8,9 @@
   <details id="import-help" class="import-help"><summary>Load an osu!mania chart with Python</summary><p>Run <code>uv sync</code>, then use the library in <code>uv run python</code>:</p><pre>import cadencia
 
 chart = cadencia.osumania.load_chart(
-    "https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"
+    url="https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"
 )
-cadencia.osumania.visualize(port="8080")</pre><p>Downloads and analysis are cached in <code>data/osumania/charts/&lt;id&gt;/trace.json</code>. Use <code>download=False</code> to require a local chart. Refresh after loading another chart.</p></details>
+cadencia.osumania.visualize(port="8080")</pre><p>First run <code>uv run download_ranked_mania.py</code> to download and preprocess 100 ranked four-key charts. <code>load_chart(name=...)</code> and <code>load_chart(url=...)</code> read existing local charts from <code>data/osumania/charts/&lt;id&gt;/trace.json</code> and raise an error when absent. Refresh after downloading another chart.</p></details>
   <div id="status" role="status" aria-live="polite">Loading local corpus…</div>
   <section class="selection" aria-label="Recording and chart">
     <label class="song-label">RECORDING<select id="song" disabled aria-label="Song"></select></label>
