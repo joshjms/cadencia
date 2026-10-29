@@ -1,0 +1,125 @@
+import json
+import zipfile
+
+import numpy as np
+import pytest
+
+import cadencia
+from cadencia.osumania import loader
+from conftest import LINK, beatmap
+
+
+def test_download_analyze_serialize_and_reload(downloaded_chart, monkeypatch):
+    chart, root, calls = downloaded_chart
+    assert isinstance(chart, cadencia.Chart)
+    assert chart.id == 4855704
+    assert len(chart.events) == 4
+    assert isinstance(chart.lanes[2][0], cadencia.osumania.Hold)
+    assert chart.lanes[2][0].end_s == 1.5
+    assert chart.song.path.is_file()
+    assert chart.song.duration_s == 4
+    folder = root / "osumania" / "charts" / "4855704"
+    assert set(path.name for path in folder.iterdir()) == {"archive.osz", "chart.osu", "song.wav", "download.json", "trace.json"}
+    trace = json.loads((folder / "trace.json").read_text())
+    assert trace["song"]["path"] == "song.wav"
+    assert trace["lanes"]["2"][0]["kind"] == "hold"
+    assert set(trace["lanes"]) == {"0", "1", "2", "3"}
+    assert len(chart.waveform.times) == len(chart.waveform.minimum) == len(chart.waveform.maximum) == 200
+    for name in ["onset_strength", "rms_energy", "spectral_centroid", "harmonic_energy_fraction", "chroma"]:
+        series = getattr(chart, name)
+        assert len(series.times) == len(series.values)
+        assert np.isfinite(np.array(series.values, dtype=float)).all()
+    assert np.asarray(chart.chroma.values).shape == (201, 12)
+    assert chart.chroma.labels[9] == "A"
+    assert np.argmax(chart.chroma.values[35]) == 9
+    assert chart.rms_energy.values[35] == pytest.approx(0.1 / np.sqrt(2), rel=0.02)
+    assert chart.spectral_centroid.values[35] == pytest.approx(440, rel=0.03)
+    assert chart.harmonic_energy_fraction.values[35] > 0.95
+    for attack in [0.5, 1, 2, 3]:
+        assert any(abs(time - attack) < 0.08 for time in chart.candidate_onsets.times)
+    assert all(0 <= time < 4 for time in chart.candidate_onsets.times)
+    assert all(0 <= value <= 1 for value in chart.harmonic_energy_fraction.values)
+    assert all(abs(time - index * 0.02) < 1e-10 for index, time in enumerate(chart.onset_strength.times))
+    assert chart.metadata["analysis"]["hop_length"] == 441
+    assert chart.metadata["provider"] == "local test fixture"
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Cache access attempted a download or audio analysis")
+
+    monkeypatch.setattr(loader, "_download", unexpected)
+    monkeypatch.setattr(loader, "analyze_song", unexpected)
+    for download in [True, False]:
+        cached = cadencia.osumania.load_chart(LINK, download=download, data_dir=root)
+        assert cached.to_dict() == chart.to_dict()
+    assert calls == [2043161]
+
+
+def test_download_disabled_does_not_create_directories_or_call_network(tmp_path, monkeypatch):
+    def unexpected(*args):
+        pytest.fail("Network access attempted")
+
+    monkeypatch.setattr(loader, "_download", unexpected)
+    root = tmp_path / "missing"
+    with pytest.raises(FileNotFoundError, match="disabled"):
+        cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+    assert not root.exists()
+
+
+def test_existing_archive_rebuilds_offline(downloaded_chart, monkeypatch):
+    chart, root, calls = downloaded_chart
+    chart.trace_path.unlink()
+
+    def unexpected(*args):
+        pytest.fail("Existing archive should be reused")
+
+    monkeypatch.setattr(loader, "_download", unexpected)
+    rebuilt = cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+    assert rebuilt.to_dict() == chart.to_dict()
+    assert calls == [2043161]
+
+
+def test_failed_import_leaves_no_partial_cache(tmp_path, package, monkeypatch):
+    with zipfile.ZipFile(package, "a") as archive:
+        archive.writestr("duplicate.osu", beatmap("64,192,500,1,0"))
+
+    def download(set_id, destination):
+        destination.write_bytes(package.read_bytes())
+        return {}
+
+    monkeypatch.setattr(loader, "_download", download)
+    root = tmp_path / "data"
+    with pytest.raises(ValueError, match="exactly one"):
+        cadencia.osumania.load_chart(LINK, data_dir=root)
+    assert not list((root / "osumania" / "charts").iterdir())
+
+
+@pytest.mark.parametrize("name", ["../outside.wav", "/absolute.wav", "C:/outside.wav", "..\\outside.wav"])
+def test_unsafe_archives_are_rejected(tmp_path, name):
+    path = tmp_path / "unsafe.osz"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(name, b"test")
+    with zipfile.ZipFile(path) as archive, pytest.raises(ValueError, match="Unsafe"):
+        loader._archive_files(archive)
+
+
+def test_cache_requires_matching_identity_and_present_audio(downloaded_chart):
+    chart, root, _ = downloaded_chart
+    trace = chart.to_dict()
+    trace["metadata"]["beatmapset_id"] = 99
+    chart.trace_path.write_text(json.dumps(trace))
+    with pytest.raises(ValueError, match="identity"):
+        cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+    chart.save()
+    chart.song.path.unlink()
+    with pytest.raises(FileNotFoundError, match="song"):
+        cadencia.osumania.load_chart(LINK, download=False, data_dir=root)
+
+
+def test_link_formats_and_data_directory(tmp_path, monkeypatch):
+    assert loader.chart_ids(LINK) == (2043161, 4855704)
+    assert loader.chart_ids(f"[{LINK}]({LINK})") == (2043161, 4855704)
+    for invalid in ["https://example.com/beatmapsets/2043161#mania/4855704", "https://osu.ppy.sh/beatmaps/4855704", "https://osu.ppy.sh/beatmapsets/2043161#osu/4855704"]:
+        with pytest.raises(ValueError):
+            loader.chart_ids(invalid)
+    monkeypatch.setenv("CADENCIA_DATA_DIR", str(tmp_path))
+    assert loader.data_root() == tmp_path

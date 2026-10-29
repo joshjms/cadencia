@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Cadencia · Chart trace lab</title><link rel="stylesheet" href="style.css"><script src="app.js" defer></script></head>
+<body>
+<header><a class="brand" href="/" aria-label="Cadencia home"><span class="brand-mark">Ⅱ</span> CADENCIA <span class="brand-sub">CHART TRACE LAB</span></a><span class="local"><i></i> LOCAL RESEARCH · <span id="corpus-size">OSU!MANIA</span></span></header>
+<main>
+  <div class="intro"><div><p class="eyebrow">MUSIC → HIT / HOLD EVENTS</p><h1>Read the rhythm.</h1><p class="muted">Inspect osu!mania timing, holds and the four original lanes against audio.</p></div><a class="text-link" href="#import-help">Import a chart ↓</a></div>
+  <details id="import-help" class="import-help"><summary>Load an osu!mania chart with Python</summary><p>Run <code>uv sync</code>, then use the library in <code>uv run python</code>:</p><pre>import cadencia
+
+chart = cadencia.osumania.load_chart(
+    "https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"
+)
+cadencia.osumania.visualize(port="8080")</pre><p>Downloads and analysis are cached in <code>data/osumania/charts/&lt;id&gt;/trace.json</code>. Use <code>download=False</code> to require a local chart. Refresh after loading another chart.</p></details>
+  <div id="status" role="status" aria-live="polite">Loading local corpus…</div>
+  <section class="selection" aria-label="Recording and chart">
+    <label class="song-label">RECORDING<select id="song" disabled aria-label="Song"></select></label>
+    <label>CHART / DIFFICULTY<select id="chart" disabled aria-label="Chart difficulty"></select></label>
+    <div id="song-meta" class="song-meta"></div>
+    <a id="detail-link" class="text-link" target="_blank" rel="noreferrer" hidden>Beatmap source ↗</a>
+  </section>
+  <section class="stats" aria-label="Selected chart summary"><div><span>HIT / HOLD STARTS</span><strong id="stat-starts">—</strong></div><div><span>EXPLICIT HOLDS</span><strong id="stat-holds">—</strong></div><div><span>CHART TEMPO</span><strong id="stat-bpm">—</strong></div><div><span>ORIGINAL COLUMNS</span><strong id="stat-columns">—</strong></div></section>
+  <div id="coverage" class="coverage" role="note">Coverage status will appear here.</div>
+  <section class="workspace" aria-label="Trace explorer">
+    <div class="trace-panel">
+      <div class="panel-title"><h2>Recording overview</h2><span id="duration">—</span></div>
+      <svg id="overview" viewBox="0 0 1100 80" role="img" aria-label="Overview waveform; click to navigate"></svg>
+      <label class="slider-label">NAVIGATE WINDOW <input id="position" type="range" min="0" max="100" step="0.1" value="0" aria-label="Window start seconds"><output id="window-label">—</output></label>
+      <div class="transport">
+        <button id="play" class="primary" disabled aria-label="Play audio">▶ Play</button>
+        <span id="clock" class="clock">0:00.000</span><span class="muted">audio clock</span>
+        <label>Seek (s)<input id="seek" type="number" min="0" step="0.1" value="0" aria-label="Seek seconds"></label><button id="seek-button">Go</button>
+        <label class="follow"><input id="follow" type="checkbox" checked> Follow</label>
+        <div class="zoom"><button id="pan-left" aria-label="Pan earlier">←</button><label>Window<select id="zoom" aria-label="Window duration"><option value="4">4 s</option><option value="8">8 s</option><option value="12" selected>12 s</option><option value="24">24 s</option><option value="48">48 s</option></select></label><button id="pan-right" aria-label="Pan later">→</button></div>
+      </div>
+      <div class="layer-controls" aria-label="Visible trace layers">
+        <label><input type="checkbox" id="grid" checked> Chart beats</label><label><input type="checkbox" id="estimated" checked> Estimated beats</label><label><input type="checkbox" id="measures"> Chart barlines</label><label><input type="checkbox" id="candidates" checked> Candidate onsets</label><label><input type="checkbox" id="context" checked> Timing / context</label>
+      </div>
+      <div class="plot-scroll" tabindex="0" role="region" aria-label="Horizontally scrollable chart trace"><svg id="trace" viewBox="0 0 1100 650" aria-label="Synchronized lanes, audio features and source context" role="group" tabindex="0"></svg></div>
+      <p class="plot-caption"><span id="column-legend"></span><span>● hit &nbsp; ├━┤ hold &nbsp; ◇ invalid event</span><span id="cursor-label">Cursor: 0.000 s</span></p>
+      <p class="footnote">Lanes 0–3 preserve the original four columns. Scroll the trace horizontally on smaller screens, or inspect the list below. Chart beats and meter come from uninherited timing points; scroll-speed changes do not change hit times or BPM. Dashed estimated beats are independent audio estimates.</p>
+    </div>
+    <aside class="inspector">
+      <p class="eyebrow">SOURCE INSPECTOR</p><h2 id="inspect-title">Select an action</h2><p class="muted small">Click or focus a marker and press Enter. The list below works without hover.</p>
+      <div id="inspection" class="inspection">No event selected.</div>
+      <div class="note-nav"><button id="prev-note">← Previous</button><button id="next-note">Next →</button></div>
+      <details><summary>Timing reference</summary><p class="small">All traces use audio sample zero. Object milliseconds are divided by 1,000. AudioLeadIn and calibration offsets are not added. Playback uses the audio clock.</p><p id="anchor" class="small"></p></details>
+      <details><summary>Readable data & provenance</summary><div id="downloads" class="downloads"></div></details>
+      <details><summary>Conversion diagnostics</summary><div id="diagnostics" class="diagnostics"></div></details>
+      <div class="scope"><strong>Research representation</strong><p>Original columns and simultaneous notes are preserved. Difficulty names are mapper labels, not calculated star ratings. Hit/hold timing and later probabilistic spatial placement remain separate research targets.</p></div>
+    </aside>
+  </section>
+  <section class="event-section"><div class="panel-title"><h2>Events in this window</h2><span id="visible-count"></span></div><div class="table-scroll"><table><thead><tr><th>Inspect</th><th>Audio start (s)</th><th>Lane</th><th>Event / simultaneous group</th><th>Duration (s)</th><th>Source</th></tr></thead><tbody id="event-table"></tbody></table></div></section>
+  <footer><span>CADENCIA / PRELIMINARY RESEARCH</span><span>Local media · no quality or enjoyment labels · no model training</span><a href="/api/manifest" target="_blank">Manifest JSON ↗</a></footer>
+</main><audio id="audio" preload="metadata"></audio>
+</body></html>
