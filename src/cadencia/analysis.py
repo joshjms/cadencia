@@ -7,6 +7,7 @@ import numpy as np
 import soundfile as sf
 
 from .chart import Series, Song, Waveform
+from .audio import read_audio
 
 SAMPLE_RATE = 22050
 FRAME_LENGTH = 2048
@@ -14,9 +15,7 @@ HOP_LENGTH = 441
 
 
 def analyze_song(path: Path, title: str, artist: str) -> dict:
-    samples, source_rate = sf.read(path, dtype="float32", always_2d=True)
-    if not len(samples) or not np.isfinite(samples).all():
-        raise ValueError("The song must contain finite audio samples")
+    samples, source_rate, decoder = read_audio(path)
 
     y = librosa.resample(samples.mean(axis=1), orig_sr=source_rate, target_sr=SAMPLE_RATE, res_type="soxr_hq")
     spectrum = abs(librosa.stft(y, n_fft=FRAME_LENGTH, hop_length=HOP_LENGTH, center=True, pad_mode="constant"))
@@ -62,7 +61,7 @@ def analyze_song(path: Path, title: str, artist: str) -> dict:
         chroma=Series(times, chroma.T.tolist(), "normalized pitch-class energy", ["C", "C♯", "D", "D♯", "E", "F", "F♯", "G", "G♯", "A", "A♯", "B"]),
         estimated_beats=(beats * HOP_LENGTH / SAMPLE_RATE).tolist(),
         analysis_metadata=dict(
-            version=1, sample_rate=SAMPLE_RATE, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH,
+            version=1, audio_decoder=decoder, sample_rate=SAMPLE_RATE, frame_length=FRAME_LENGTH, hop_length=HOP_LENGTH,
             stft_window="Hann", rms_window="rectangular", center=True, padding="constant zero",
             channel_mix="mean", resampling="soxr_hq",
             feature_timestamps="Frame centers: frame index * hop / sample rate",

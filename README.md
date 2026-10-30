@@ -8,6 +8,8 @@ Requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
 
 Download and preprocess 100 ranked four-key osu!mania charts:
 
+Audio loading first uses SoundFile. If its decoder raises `LibsndfileError`, Cadencia tries the `ffmpeg` executable from `PATH`, decoding to a temporary float32 WAV at the original sample rate and channel count. This fallback is shared by preprocessing and `get_waveform`, preserves the original audio file, and records `audio_decoder` in the analysis metadata. Install FFmpeg to enable it; if both decoders fail, the script logs and skips that chart.
+
 ```sh
 uv run download_ranked_mania.py
 ```

@@ -2,8 +2,8 @@ from numbers import Real
 
 import librosa
 import numpy as np
-import soundfile as sf
 
+from .audio import read_audio
 from .chart import Chart
 
 
@@ -47,9 +47,7 @@ def _counts(chart, event_times, sampling_rate):
 
 def get_waveform(chart: Chart, sampling_rate: float = 22050) -> np.ndarray:
     rate = _validate_rate(sampling_rate)
-    samples, source_rate = sf.read(chart.song.path, dtype="float32", always_2d=True)
-    if not len(samples) or not np.isfinite(samples).all():
-        raise ValueError("The song must contain finite audio samples")
+    samples, source_rate, _ = read_audio(chart.song.path)
     waveform = librosa.resample(
         samples.mean(axis=1), orig_sr=source_rate, target_sr=rate, res_type="soxr_hq",
     )
