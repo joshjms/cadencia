@@ -233,3 +233,67 @@ uv build
 ```
 
 The viewer ships inside the Python package and needs no frontend build or Node installation. Tests cover parsing, explicit holds, source timing, feature extraction, cache reuse, failed imports, lane filtering, HTTP assets and byte-range audio playback.
+
+## Generate a reusable chart artifact
+
+```python
+import cadencia
+
+model = cadencia.osumania.load_model("data/ranked_hit_transformer.pt")
+chart_file = model.create_chart("song.mp3", out="generated/song.cadencia")
+
+config = cadencia.osumania.SimulatorConfig(
+    keybinds=("KeyD", "KeyF", "KeyJ", "KeyK"), tile_speed=420,
+)
+cadencia.osumania.Simulator(chart_file, port=8080, config=config)
+```
+
+`load_model` loads the transformer and its normalization once; reuse it to create
+multiple charts. `create_chart` returns the output `Path` and refuses to overwrite
+an existing file. The `.cadencia` artifact is a ZIP containing a versioned
+`chart.json` manifest and `audio.wav`, with first-lane notes, prediction
+probabilities, generation settings, model checksum and audio checksum. It is a
+Cadencia simulator format, not an osu! beatmap archive.
+
+Move or share the single artifact to play it later. `Simulator(CHART_FILE, ...)`
+verifies its contents and opens the chart ready to play without regenerating
+notes, needing the original MP3, or loading PyTorch. Chart playback still uses
+the base Cadencia dependencies. Creating charts requires `uv sync --extra training`.
+
+## Browser simulator
+
+Run the first-lane transformer preview with the existing trained checkpoint:
+
+```sh
+uv sync --extra training
+uv run --extra training python -c 'from cadencia.osumania import Simulator; Simulator(port=8080)'
+```
+
+Open the printed localhost URL (a browser opens automatically), choose an MP3,
+then click **Generate notes** and **Play**. Use D on the first lane; the default
+four bindings are D/F/J/K. The browser supports rebinding, tile speed adjustment,
+pause, restart, autoplay, scoring, combo and miss counts. Tile speed changes
+scrolling in pixels per second; it does not change the song playback rate.
+
+```python
+from cadencia.osumania import Simulator, SimulatorConfig
+
+Simulator(
+    port=8080,
+    config=SimulatorConfig(keybinds=("KeyA", "KeyS", "KeyK", "KeyL"), tile_speed=500),
+    checkpoint="data/ranked_hit_transformer.pt",
+)
+```
+
+Bindings use browser `KeyboardEvent.code` names. For a notebook, pass
+`block=False`, keep the returned instance and call `simulator.close()` to stop.
+The server binds to loopback only. Uploaded audio and prepared playback files
+are temporary and removed when the simulator closes. Uploads are limited to
+100 MiB; inference runs on CPU and reports individual song failures in the UI.
+
+All generated notes are taps on lane one. Candidates come from estimated beats,
+beat midpoints and detected onsets, without existing chart timestamps. The
+transformer uses its own accepted predictions as history, with at least 80 ms
+between taps. The first two seconds supply history and contain no generated
+notes. This differs from training's candidates, which included known tap times;
+held-out dataset scores do not measure arbitrary-song generation quality.
