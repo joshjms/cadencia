@@ -64,9 +64,9 @@ charts = client.download_charts({
 })
 ```
 
-The script defaults to 100 charts and logs progress for each processed difficulty:
+The script defaults to 100 charts and logs progress for each processed difficulty.
 
-Charts without a standalone song recording raise `cadencia.osumania.MissingChartAudioError`. For example, some maps use `AudioFilename: virtual` and construct their music from storyboard samples and keysounds, which Cadencia does not render.
+Charts without a standalone song recording raise `cadencia.osumania.MissingChartAudioError`. For example, some maps use `AudioFilename: virtual` and construct their music from storyboard samples and keysounds, which Cadencia does not render. The script catches individual download and preprocessing failures, logs the chart URL, exception type and message, and continues until the requested number of charts has been successfully processed. Keyboard interrupts still stop the run, and catalogue request failures or search exhaustion remain fatal. Rerunning reuses already processed charts.
 
 ```sh
 uv run download_ranked_mania.py

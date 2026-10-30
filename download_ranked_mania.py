@@ -5,39 +5,47 @@ import logging
 
 from cadencia.osumania import HinamizawaClient
 
+logger = logging.getLogger(__name__)
+
 
 def download_ranked_four_key(client, *, count=100, query=""):
-    """Select four-key difficulties in the script, then acquire them explicitly."""
+    """Process four-key charts, logging and skipping individual chart failures."""
     if count < 1:
         raise ValueError("count must be positive")
-    urls, seen, seen_sets = [], set(), set()
+    charts, seen, seen_sets = [], set(), set()
     page = 0
-    while len(urls) < count:
+    while len(charts) < count:
         result = client.get_ranked_mania({"query": query, "page": page})
         beatmapsets = result["beatmapsets"]
         if not beatmapsets:
-            raise RuntimeError(f"Search exhausted after {len(urls)} of {count} four-key ranked charts")
+            raise RuntimeError(f"Search exhausted after processing {len(charts)} of {count} four-key ranked charts")
         set_ids = {int(beatmapset["id"]) for beatmapset in beatmapsets}
         if set_ids <= seen_sets:
             raise RuntimeError("Hinamizawa pagination repeated previously seen sets without advancing")
         seen_sets.update(set_ids)
         for beatmapset in beatmapsets:
             for beatmap in beatmapset.get("beatmaps", []):
-                mode = beatmap.get("mode_int", beatmap.get("mode"))
-                status = beatmap.get("ranked", beatmap.get("status", beatmapset.get("status")))
-                if mode not in (3, "mania") or beatmap.get("cs") != 4 or status not in (1, 2, "ranked", "approved"):
+                url = f"chart in beatmapset {beatmapset['id']}"
+                try:
+                    url = f"https://osu.ppy.sh/beatmapsets/{beatmapset['id']}#mania/{beatmap['id']}"
+                    mode = beatmap.get("mode_int", beatmap.get("mode"))
+                    status = beatmap.get("ranked", beatmap.get("status", beatmapset.get("status")))
+                    if mode not in (3, "mania") or beatmap.get("cs") != 4 or status not in (1, 2, "ranked", "approved"):
+                        continue
+                    chart_id = int(beatmap["id"])
+                    if chart_id in seen:
+                        continue
+                    seen.add(chart_id)
+                    url = f"https://osu.ppy.sh/beatmapsets/{int(beatmapset['id'])}#mania/{chart_id}"
+                    charts.extend(client.download_charts({"urls": [url]}))
+                except Exception as error:
+                    logger.warning("Skipping %s: %s: %s", url, type(error).__name__, error)
                     continue
-                chart_id = int(beatmap["id"])
-                if chart_id in seen:
-                    continue
-                seen.add(chart_id)
-                urls.append(f"https://osu.ppy.sh/beatmapsets/{int(beatmapset['id'])}#mania/{chart_id}")
-                if len(urls) == count:
-                    break
-            if len(urls) == count:
-                break
+                logger.info("Ready: %s/%s ranked four-key charts", len(charts), count)
+                if len(charts) == count:
+                    return charts
         page += 1
-    return client.download_charts({"urls": urls})
+    return charts
 
 
 def main():
