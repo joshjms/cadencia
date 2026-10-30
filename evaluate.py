@@ -45,7 +45,7 @@ def rollout(model, inputs, times, mean, scale, threshold):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data/ranked_beat_dataset.json")
+    parser.add_argument("--data", default="data/ranked_beat_dataset/manifest.json")
     parser.add_argument("--checkpoint", default="data/ranked_hit_transformer.pt")
     parser.add_argument("--output", default="data/ranked_rollout_results.json")
     args = parser.parse_args()
@@ -53,10 +53,10 @@ def main():
     if checkpoint["features"] != FEATURES:
         raise ValueError("Checkpoint features do not match the dataset loader")
     frame, x, y = load_data(args.data)
-    indices = frame.index[frame.song_id == checkpoint["test_song"]].to_numpy()
-    indices = indices[np.argsort(frame.loc[indices, "time_s"].to_numpy(), kind="stable")]
-    if not len(indices) or frame.loc[indices, "chart_id"].nunique() != 1:
-        raise ValueError("Expected one test chart")
+    test_songs = checkpoint.get("test_songs") or [checkpoint["test_song"]]
+    indices = frame.loc[frame.song_id.isin(test_songs)].sort_values(["chart_id", "time_s"], kind="stable").index.to_numpy()
+    if not len(indices):
+        raise ValueError("No test charts match the checkpoint")
     x, y = x[indices], y[indices]
     times = frame.loc[indices, "time_s"].to_numpy()
     mean, scale = checkpoint["mean"].numpy(), checkpoint["scale"].numpy()
@@ -66,9 +66,13 @@ def main():
     normalized = ((np.where(np.isfinite(x), x, mean) - mean) / scale).astype(np.float32)
     loader = DataLoader(TensorDataset(torch.from_numpy(normalized), torch.from_numpy(y)), batch_size=32)
     real_history = predict(model, loader, torch.device("cpu"))
-    predicted_history = rollout(model, x, times, mean, scale, threshold)
+    chart_ids = frame.loc[indices, "chart_id"].to_numpy()
+    predicted_history = np.empty(len(y))
+    for chart_id in np.unique(chart_ids):
+        mask = chart_ids == chart_id
+        predicted_history[mask] = rollout(model, x[mask], times[mask], mean, scale, threshold)
     result = {
-        "test_song": checkpoint["test_song"], "rows": len(y), "threshold": threshold,
+        "test_songs": test_songs, "test_charts": np.unique(chart_ids).tolist(), "rows": len(y), "threshold": threshold,
         "real_history": metrics(y, real_history, threshold),
         "predicted_history": metrics(y, predicted_history, threshold),
         "initial_history": "Empty; dataset starts after the first two seconds",

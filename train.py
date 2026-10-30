@@ -8,16 +8,16 @@ import torch
 from sklearn.metrics import average_precision_score, precision_recall_fscore_support
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
-
-
-FEATURES = [
-    "waveform", "onset_strength", "rms_energy", "spectral_centroid",
-    "harmonic_energy_fraction", "chroma", "candidate_onsets", "estimated_beats",
-    "hit_history",
-]
+from cadencia.dataset import FEATURES, load_dataset
 
 
 def load_data(path):
+    path = Path(path)
+    if path.is_dir() or path.name == "manifest.json":
+        frame, x, y = load_dataset(path)
+        if x.shape[1:] != (100, 20):
+            raise ValueError(f"Expected 100 steps and 20 features, got {x.shape[1:]}")
+        return frame, x, y
     frame = pd.read_json(path)
     arrays = []
     for name in FEATURES:
@@ -60,8 +60,8 @@ def predict(model, loader, device):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", default="data/beat_dataset.json")
-    parser.add_argument("--output", default="data/hit_transformer.pt")
+    parser.add_argument("--data", default="data/ranked_beat_dataset/manifest.json")
+    parser.add_argument("--output", default="data/ranked_hit_transformer.pt")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
@@ -71,23 +71,33 @@ def main():
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     frame, x, y = load_data(args.data)
-    songs = rng.permutation(frame.song_id.unique())
-    if len(songs) < 3:
-        raise ValueError("At least three songs are needed for separate splits")
-    splits = [frame.song_id.isin(songs[:-2]).to_numpy(),
-              (frame.song_id == songs[-2]).to_numpy(),
-              (frame.song_id == songs[-1]).to_numpy()]
-    train = np.where(np.isfinite(x[splits[0]]), x[splits[0]], np.nan)
+    if "split" in frame:
+        splits = [(frame["split"] == name).to_numpy() for name in ("train", "validation", "test")]
+        if not all(mask.any() for mask in splits):
+            raise ValueError("At least three independent groups are needed for separate splits")
+    else:
+        songs = rng.permutation(frame.song_id.unique())
+        if len(songs) < 3:
+            raise ValueError("At least three songs are needed for separate splits")
+        splits = [frame.song_id.isin(songs[:-2]).to_numpy(),
+                  (frame.song_id == songs[-2]).to_numpy(),
+                  (frame.song_id == songs[-1]).to_numpy()]
+    split_songs = [sorted(int(song) for song in frame.song_id[mask].unique()) for mask in splits]
+    train = x[splits[0]]
+    train[~np.isfinite(train)] = np.nan
     mean = np.nanmean(train, axis=(0, 1))
     mean = np.nan_to_num(mean, nan=0.0)
     scale = np.nanstd(train, axis=(0, 1))
     scale = np.where(np.isfinite(scale) & (scale > 1e-6), scale, 1.0)
+    del train
     x = np.where(np.isfinite(x), x, mean)
-    x = ((x - mean) / scale).astype(np.float32)
+    x -= mean
+    x /= scale
     loaders = [DataLoader(
         TensorDataset(torch.from_numpy(x[mask]), torch.from_numpy(y[mask])),
         batch_size=args.batch_size, shuffle=i == 0,
     ) for i, mask in enumerate(splits)]
+    del x
     for name, mask in zip(["train", "validation", "test"], splits):
         print(f"{name}: songs={frame.song_id[mask].unique().tolist()}, rows={mask.sum()}")
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -133,8 +143,8 @@ def main():
         "model": {k: v.cpu() for k, v in best_state.items()},
         "mean": torch.from_numpy(mean), "scale": torch.from_numpy(scale),
         "threshold": threshold, "features": FEATURES,
-        "train_songs": [int(s) for s in songs[:-2]],
-        "validation_song": int(songs[-2]), "test_song": int(songs[-1]),
+        "train_songs": split_songs[0], "validation_songs": split_songs[1], "test_songs": split_songs[2],
+        "validation_song": split_songs[1][0], "test_song": split_songs[2][0],
         "seed": args.seed,
     }, args.output)
     print(f"Saved {args.output}")

@@ -102,6 +102,13 @@ print(X.shape, y.shape)
 train_mask = frame["split"].eq("train").to_numpy()
 ```
 
+`train.py` and `evaluate.py` accept this dataset directory or its `manifest.json`, and default to this path. Training uses the saved group splits and fits imputation and scaling on the training partition only. Evaluation resets predicted hit history separately for each test chart. Training dependencies are optional and are not needed to build the dataset:
+
+```sh
+uv run --extra training train.py
+uv run --extra training evaluate.py
+```
+
 Both `include=["lane0", "lane1", "waveform"]` and `include=["lane0, lane1, waveform"]` work. Omitting `include` displays every layer. Available names:
 
 ```python
