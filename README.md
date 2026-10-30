@@ -66,6 +66,8 @@ charts = client.download_charts({
 
 The script defaults to 100 charts and logs progress for each processed difficulty:
 
+Charts without a standalone song recording raise `cadencia.osumania.MissingChartAudioError`. For example, some maps use `AudioFilename: virtual` and construct their music from storyboard samples and keysounds, which Cadencia does not render.
+
 ```sh
 uv run download_ranked_mania.py
 uv run download_ranked_mania.py --count 10 --query Camellia --data-dir /path/to/data

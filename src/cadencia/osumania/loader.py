@@ -11,6 +11,10 @@ from .chart import Chart
 from .parser import parse_chart, sections, validate_headers
 
 
+class MissingChartAudioError(FileNotFoundError):
+    """A chart has no standalone song recording that Cadencia can analyze."""
+
+
 def data_root(data_dir=None) -> Path:
     return Path(data_dir or os.environ.get("CADENCIA_DATA_DIR", "data")).resolve()
 
@@ -63,7 +67,13 @@ def _build_chart(folder: Path, set_id: int, chart_id: int, link: str, provenance
             raise ValueError("Unsafe AudioFilename in chart")
         audio_key = (Path(name.replace("\\", "/")).parent / relative).as_posix().casefold()
         if audio_key not in files:
-            raise FileNotFoundError(f"Associated song is missing from archive: {filename}")
+            explanation = (
+                "This chart uses virtual audio; rendering storyboard samples and keysounds is not supported."
+                if filename.casefold() == "virtual" else "Associated song is missing from the archive."
+            )
+            raise MissingChartAudioError(
+                f"Chart {chart_id} in set {set_id}: {explanation} AudioFilename: {filename!r} ({link})"
+            )
         song_path = folder / ("song" + Path(filename).suffix.lower())
         song_path.write_bytes(archive.read(files[audio_key]))
         (folder / "chart.osu").write_bytes(payload)

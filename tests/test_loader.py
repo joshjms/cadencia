@@ -100,6 +100,33 @@ def test_failed_import_leaves_no_partial_cache(tmp_path, package, monkeypatch):
     assert not list((root / "osumania" / "charts").iterdir())
 
 
+@pytest.mark.parametrize("filename", ["virtual", "Virtual", "missing.wav"])
+def test_missing_song_has_specific_error_and_no_partial_cache(tmp_path, package, monkeypatch, filename):
+    archive_path = tmp_path / "missing-song.osz"
+    with zipfile.ZipFile(package) as source, zipfile.ZipFile(archive_path, "w") as archive:
+        for name in source.namelist():
+            payload = source.read(name)
+            if name == "hyper.osu":
+                payload = payload.replace(b"AudioFilename: audio.wav", f"AudioFilename: {filename}".encode())
+            archive.writestr(name, payload)
+
+    client = cadencia.osumania.HinamizawaClient(data_dir=tmp_path / "data")
+
+    def download(set_id, destination):
+        destination.write_bytes(archive_path.read_bytes())
+        return {}
+
+    monkeypatch.setattr(client, "_download", download)
+    monkeypatch.setattr(loader, "analyze_song", lambda *args: pytest.fail("Missing recording reached analysis"))
+    with pytest.raises(cadencia.osumania.MissingChartAudioError) as error:
+        client.download_charts({"urls": [LINK]})
+    assert isinstance(error.value, FileNotFoundError)
+    assert filename in str(error.value)
+    assert "4855704" in str(error.value) and "2043161" in str(error.value)
+    assert LINK in str(error.value)
+    assert list((client.data_dir / "osumania/charts").iterdir()) == []
+
+
 @pytest.mark.parametrize("name", ["../outside.wav", "/absolute.wav", "C:/outside.wav", "..\\outside.wav"])
 def test_unsafe_archives_are_rejected(tmp_path, name):
     path = tmp_path / "unsafe.osz"
