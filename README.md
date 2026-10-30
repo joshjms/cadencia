@@ -53,7 +53,7 @@ cadencia.osumania.visualize(
 
 `HinamizawaClient.download_charts(params)` accepts either an explicit `{"urls": [...]}` selection or the same search filters plus `count` (default 100). It downloads the selected charts' sets and runs chart and audio preprocessing, without silently skipping any key counts. Cadencia's parser still raises `ValueError` for unsupported charts. Four-key filtering and pagination for the 100-chart dataset live in `download_ranked_mania.py`: the script selects individual ranked four-key difficulties and passes their URLs to the client.
 
-The client counts cached charts toward the requested total, reuses their traces, and downloads a set once per call even when it contains multiple selected difficulties. If only an archive exists, the client rebuilds its trace. Search exhaustion, download failures and preprocessing failures raise errors; already processed charts remain available for rerunning the batch. Requests retry HTTP 429 and 5xx responses up to three attempts, honoring `Retry-After` delays up to 60 seconds; longer delays are reported to the caller.
+The client counts cached charts toward the requested total, reuses their traces, and reuses downloaded set archives across calls on the same client. If only an archive exists, the client rebuilds its trace. Search exhaustion, download failures and preprocessing failures raise errors; already processed charts remain available for rerunning the batch. Requests retry HTTP 429 and 5xx responses up to three attempts, honoring `Retry-After` delays up to 60 seconds; longer delays are reported to the caller.
 
 ```python
 client = cadencia.osumania.HinamizawaClient(data_dir="data")

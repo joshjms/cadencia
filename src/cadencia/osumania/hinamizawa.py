@@ -47,6 +47,7 @@ class HinamizawaClient:
         self.data_dir = loader.data_root(data_dir)
         self.timeout = timeout
         self.user_agent = user_agent
+        self._archives = {}
 
     def _open(self, url):
         request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
@@ -126,7 +127,7 @@ class HinamizawaClient:
             folder.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix=f".{chart_id}-", dir=folder.parent) as temporary:
                 staging = Path(temporary)
-                if set_id in archives:
+                if set_id in archives and archives[set_id][0].is_file():
                     source, provenance = archives[set_id]
                     shutil.copyfile(source, staging / "archive.osz")
                 else:
@@ -145,7 +146,7 @@ class HinamizawaClient:
     def download_charts(self, params=None) -> list[Chart]:
         """Download/preprocess explicit ``urls`` or ``count`` search results.
 
-        Reuses processed traces and downloads each set only once per call.
+        Reuses processed traces and archives downloaded by this client.
         Returns local Charts. Raises if the search is exhausted before ``count``
         unique charts are processed; successfully cached charts remain available
         for a later retry. No key counts are silently skipped: unsupported charts
@@ -158,14 +159,14 @@ class HinamizawaClient:
             if query or not isinstance(urls, (list, tuple)):
                 raise ValueError("urls must be a list of chart URLs and cannot be combined with search parameters")
             identities = dict.fromkeys(loader.chart_ids(url) for url in urls)
-            charts, archives = [], {}
+            charts, archives = [], self._archives
             for set_id, chart_id in identities:
                 charts.append(self._prepare_chart(set_id, chart_id, archives))
                 logger.info("Processed %s/%s: %s", len(charts), len(identities), charts[-1].metadata["source_url"])
             return charts
         count = _integer(query.pop("count", 100), "count", 1)
         page = _integer(query.get("page", 0), "page", 0)
-        charts, seen, seen_sets, archives = [], set(), set(), {}
+        charts, seen, seen_sets, archives = [], set(), set(), self._archives
         while len(charts) < count:
             result = self.get_ranked_mania({**query, "page": page})
             if not result["beatmapsets"]:

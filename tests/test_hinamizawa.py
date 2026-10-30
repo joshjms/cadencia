@@ -193,8 +193,8 @@ def test_explicit_urls_bypass_search_and_reuse_archives(tmp_path, package, monke
 
     monkeypatch.setattr(client, "get_ranked_mania", unexpected)
     monkeypatch.setattr(urllib.request, "urlopen", open_url)
-    urls = [LINK, LINK, "https://osu.ppy.sh/beatmapsets/2043161#mania/1"]
-    charts = client.download_charts({"urls": urls})
+    charts = client.download_charts({"urls": [LINK, LINK]})
+    charts.extend(client.download_charts({"urls": ["https://osu.ppy.sh/beatmapsets/2043161#mania/1"]}))
     assert [chart.id for chart in charts] == [4855704, 1]
     assert len(downloads) == 1
 
