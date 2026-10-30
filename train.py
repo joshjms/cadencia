@@ -1,5 +1,7 @@
 import argparse
 import copy
+import json
+import time
 from pathlib import Path
 
 import numpy as np
@@ -65,9 +67,18 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
+    parser.add_argument("--patience", type=int, default=7, help="Early-stopping patience; 0 runs every requested epoch")
     args = parser.parse_args()
-    if args.epochs < 1 or args.batch_size < 1:
-        parser.error("epochs and batch-size must be positive")
+    if args.epochs < 1 or args.batch_size < 1 or args.patience < 0:
+        parser.error("epochs and batch-size must be positive; patience must be nonnegative")
+    if args.device == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA was requested but is unavailable")
+    device = torch.device("cuda" if args.device == "auto" and torch.cuda.is_available()
+                          else "cpu" if args.device == "auto" else args.device)
+    print(f"device={device} torch={torch.__version__}" +
+          (f" gpu={torch.cuda.get_device_name(device)}" if device.type == "cuda" else ""), flush=True)
+    started = time.perf_counter()
     torch.manual_seed(args.seed)
     rng = np.random.default_rng(args.seed)
     frame, x, y = load_data(args.data)
@@ -100,13 +111,14 @@ def main():
     del x
     for name, mask in zip(["train", "validation", "test"], splits):
         print(f"{name}: songs={frame.song_id[mask].unique().tolist()}, rows={mask.sum()}")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = HitTransformer().to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001)
     loss_fn = nn.BCEWithLogitsLoss()
     best_score, stale = -1.0, 0
+    best_epoch, history = 0, []
     best_state = copy.deepcopy(model.state_dict())
     for epoch in range(args.epochs):
+        epoch_started = time.perf_counter()
         model.train()
         total = 0.0
         for features, labels in loaders[0]:
@@ -117,13 +129,17 @@ def main():
             total += loss.item() * len(labels)
         probabilities = predict(model, loaders[1], device)
         score = average_precision_score(y[splits[1]], probabilities)
-        print(f"epoch={epoch + 1} loss={total / splits[0].sum():.4f} validation_AP={score:.4f}")
+        epoch_seconds = time.perf_counter() - epoch_started
+        history.append(dict(epoch=epoch + 1, loss=total / int(splits[0].sum()),
+                            validation_AP=float(score), seconds=epoch_seconds))
+        print(f"epoch={epoch + 1} loss={history[-1]['loss']:.4f} validation_AP={score:.4f} seconds={epoch_seconds:.2f}", flush=True)
         if score > best_score:
             best_score, stale = score, 0
+            best_epoch = epoch + 1
             best_state = copy.deepcopy(model.state_dict())
         else:
             stale += 1
-            if stale >= 7:
+            if args.patience and stale >= args.patience:
                 break
     model.load_state_dict(best_state)
     validation = predict(model, loaders[1], device)
@@ -146,8 +162,25 @@ def main():
         "train_songs": split_songs[0], "validation_songs": split_songs[1], "test_songs": split_songs[2],
         "validation_song": split_songs[1][0], "test_song": split_songs[2][0],
         "seed": args.seed,
+        "epochs_completed": len(history), "best_epoch": best_epoch,
+        "best_validation_AP": float(best_score), "device": str(device),
+        "torch_version": str(torch.__version__),
     }, args.output)
+    metrics = dict(
+        data=str(Path(args.data).resolve()), checkpoint=str(Path(args.output).resolve()),
+        device=str(device), gpu=torch.cuda.get_device_name(device) if device.type == "cuda" else None,
+        torch_version=str(torch.__version__), seed=args.seed, batch_size=args.batch_size,
+        requested_epochs=args.epochs, epochs_completed=len(history), patience=args.patience,
+        best_epoch=best_epoch, best_validation_AP=float(best_score), threshold=threshold,
+        test=dict(average_precision=float(ap), precision=float(precision), recall=float(recall), f1=float(f1)),
+        elapsed_seconds=time.perf_counter() - started, history=history,
+        splits={name: dict(songs=split_songs[index], rows=int(mask.sum()))
+                for index, (name, mask) in enumerate(zip(["train", "validation", "test"], splits))},
+    )
+    metrics_path = Path(args.output).with_suffix(".metrics.json")
+    metrics_path.write_text(json.dumps(metrics, indent=2))
     print(f"Saved {args.output}")
+    print(f"Saved {metrics_path}")
 
 
 if __name__ == "__main__":

@@ -8,8 +8,6 @@ Requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
 
 Download and preprocess 100 ranked four-key osu!mania charts:
 
-Audio loading first uses SoundFile. If its decoder raises `LibsndfileError`, Cadencia tries the `ffmpeg` executable from `PATH`, decoding to a temporary float32 WAV at the original sample rate and channel count. This fallback is shared by preprocessing and `get_waveform`, preserves the original audio file, and records `audio_decoder` in the analysis metadata. Install FFmpeg to enable it; if both decoders fail, the script logs and skips that chart.
-
 ```sh
 uv run download_ranked_mania.py
 ```
@@ -70,6 +68,8 @@ The script defaults to 100 charts and logs progress for each processed difficult
 
 Charts without a standalone song recording raise `cadencia.osumania.MissingChartAudioError`. For example, some maps use `AudioFilename: virtual` and construct their music from storyboard samples and keysounds, which Cadencia does not render. The script catches individual download and preprocessing failures, logs the chart URL, exception type and message, and continues until the requested number of charts has been successfully processed. Keyboard interrupts still stop the run, and catalogue request failures or search exhaustion remain fatal. Rerunning reuses already processed charts.
 
+Audio loading first uses SoundFile. If its decoder raises `LibsndfileError`, Cadencia tries the `ffmpeg` executable from `PATH`, decoding to a temporary float32 WAV at the original sample rate and channel count. This fallback is shared by preprocessing and `get_waveform`, preserves the original audio file, and records `audio_decoder` in the analysis metadata. Install FFmpeg to enable it; if both decoders fail, the script logs and skips that chart.
+
 ```sh
 uv run download_ranked_mania.py
 uv run download_ranked_mania.py --count 10 --query Camellia --data-dir /path/to/data
@@ -108,6 +108,14 @@ train_mask = frame["split"].eq("train").to_numpy()
 uv run --extra training train.py
 uv run --extra training evaluate.py
 ```
+
+To require CUDA and complete all 50 epochs, disable early stopping explicitly:
+
+```sh
+uv run --extra training train.py --device cuda --epochs 50 --patience 0
+```
+
+The trainer saves the model with the best validation average precision and a `.metrics.json` file containing epoch timings, losses, validation scores and final test metrics. The default early-stopping patience remains seven epochs.
 
 Both `include=["lane0", "lane1", "waveform"]` and `include=["lane0, lane1, waveform"]` work. Omitting `include` displays every layer. Available names:
 
