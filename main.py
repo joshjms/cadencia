@@ -5,45 +5,23 @@ from pathlib import Path
 import cadencia
 import numpy as np
 import pandas as pd
+from cadencia.dataset import FEATURES, chart_samples
 
 
 def beat_dataset(chart, window_s=2, sampling_rate=50):
-    if window_s <= 0 or sampling_rate <= 0:
-        raise ValueError("window_s and sampling_rate must be positive")
-    samples = round(window_s * sampling_rate)
-    if samples < 1:
-        raise ValueError("The window must contain at least one sample")
-    beats = np.array([beat["time_s"] for beat in chart.beat_grid])
-    if not len(beats):
-        raise ValueError("The chart has no BPM beat grid")
-    hits = np.array([
-        event.start_s for event in chart.events
-        if isinstance(event, cadencia.osumania.Hit) and event.analysis_eligible
-    ])
-    beats = np.unique(np.concatenate([np.round(beats, 3), hits]))
-    labels = np.isin(beats, hits).astype(int)
-    names = [
-        "waveform", "onset_strength", "rms_energy", "spectral_centroid",
-        "harmonic_energy_fraction", "chroma", "candidate_onsets", "estimated_beats",
-    ]
-    signals = {
-        name: getattr(cadencia, f"get_{name}")(chart, sampling_rate=sampling_rate)
-        for name in names
-    }
-    times = np.arange(len(signals["onset_strength"])) / sampling_rate
-    ends = np.searchsorted(times, beats)
-    complete = (beats >= window_s) & (ends >= samples)
-    windows = ends[complete, None] - samples + np.arange(samples)
-    edges = beats[complete, None] - window_s + np.linspace(0, window_s, samples + 1)
-    edges[:, -1] = beats[complete]
-    hit_history = np.diff(np.searchsorted(hits, edges, side="left"), axis=1)
+    x, labels, times = chart_samples(chart, window_s=window_s, sampling_rate=sampling_rate)
+    columns = {}
+    offset = 0
+    for name in FEATURES:
+        width = 12 if name == "chroma" else 1
+        values = x[:, :, offset:offset + width]
+        columns[name] = (values[:, :, 0] if width == 1 else values).tolist()
+        offset += width
     return pd.DataFrame({
         "song_id": chart.metadata["beatmapset_id"],
         "chart_id": chart.id,
-        "time_s": beats[complete],
-        **{name: values[windows].tolist() for name, values in signals.items()},
-        "hit_history": hit_history.tolist(),
-        "hit": np.eye(2, dtype=int)[labels[complete]].tolist(),
+        "time_s": times, **columns,
+        "hit": np.eye(2, dtype=int)[labels].tolist(),
     })
 
 
