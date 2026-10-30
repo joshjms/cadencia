@@ -77,6 +77,31 @@ uv run download_ranked_mania.py --count 10 --query Camellia --data-dir /path/to/
 
 `uv run main.py --manifest links.json` builds a beat dataset from charts already preprocessed locally. Its manifest is a JSON array of objects containing `link` URLs.
 
+## Dataset from local charts
+
+Build a training dataset from every existing `data/osumania/charts/*/trace.json`:
+
+```sh
+uv run make_dataset.py
+uv run make_dataset.py --data-dir /path/to/data --output /path/to/new-dataset
+```
+
+This reads cached traces and their local audio without downloading maps or recomputing the original audio analysis. It resamples the existing descriptors and audio waveform for the dataset. Individual chart failures are logged and recorded in the manifest. The default output directory, `data/ranked_beat_dataset`, contains a `manifest.json` and one compressed `.npz` shard per chart. An existing dataset is never overwritten.
+
+Each row represents a candidate timestamp with the preceding two seconds sampled at 50 Hz: `X` has shape `(rows, 100, 20)` and float32 values, `y` is a binary tap label, and `time_s` stores the target timestamp. The channels are waveform, onset strength, RMS energy, spectral centroid, harmonic energy fraction, twelve chroma channels, candidate-onset counts, estimated-beat counts, and historical tap counts. Multiple taps at one timestamp produce one positive label; history retains their counts. Holds are excluded from the tap target. Samples before two seconds or outside the song duration are excluded, and the target tap never appears in its own history.
+
+The builder preserves the existing `beat_dataset` candidate definition: the union of beat-grid timestamps rounded to milliseconds and known tap timestamps. This makes it a **conditional hit-classification baseline**; it does not evaluate discovering note times from audio alone. Audio descriptors use centered analysis windows, so this is also not a strictly causal streaming dataset. Undefined feature values remain `NaN`, for training-only imputation and normalization.
+
+The seeded split assigns approximately 80/10/10 percent of independent groups to training, validation and test. Difficulties sharing a beatmapset or byte-identical audio stay together, including transitive matches across sets. Fewer than three groups produces a train-only dataset. The manifest records feature order, parameters, source and shard checksums, per-chart membership, class counts, split assignments and skipped charts.
+
+```python
+from cadencia.dataset import load_dataset
+
+frame, X, y = load_dataset("data/ranked_beat_dataset")
+print(X.shape, y.shape)
+train_mask = frame["split"].eq("train").to_numpy()
+```
+
 Both `include=["lane0", "lane1", "waveform"]` and `include=["lane0, lane1, waveform"]` work. Omitting `include` displays every layer. Available names:
 
 ```python
