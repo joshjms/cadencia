@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import shutil
 import tempfile
 import time
@@ -43,11 +44,12 @@ class HinamizawaClient:
     oldest-ranked-first ordering. Key-count selection belongs to the caller.
     """
 
-    def __init__(self, *, data_dir=None, timeout=180, user_agent="cadencia/0.1.0"):
+    def __init__(self, *, data_dir=None, timeout=180, user_agent="cadencia/1.0"):
         self.data_dir = loader.data_root(data_dir)
         self.timeout = timeout
         self.user_agent = user_agent
         self._archives = {}
+        self._ratings = {}
 
     def _open(self, url):
         request = urllib.request.Request(url, headers={"User-Agent": self.user_agent})
@@ -99,6 +101,11 @@ class HinamizawaClient:
             result = json.load(response)
         if not isinstance(result, dict) or not isinstance(result.get("beatmapsets"), list):
             raise ValueError("Unexpected Hinamizawa search response: expected beatmapsets array")
+        for beatmapset in result['beatmapsets']:
+            for beatmap in beatmapset.get('beatmaps', []):
+                rating = beatmap.get('difficulty_rating')
+                if isinstance(rating, (int, float)) and not isinstance(rating, bool) and math.isfinite(rating) and rating > 0:
+                    self._ratings[int(beatmap['id'])] = float(rating)
         return result
 
     def _download(self, set_id: int, destination: Path) -> dict:
@@ -141,6 +148,10 @@ class HinamizawaClient:
         if (folder / "archive.osz").is_file():
             path = folder / "download.json"
             archives[set_id] = (folder / "archive.osz", json.loads(path.read_text()) if path.is_file() else {})
+        if chart_id in self._ratings:
+            chart.metadata['star_rating'] = self._ratings[chart_id]
+            chart.metadata['star_rating_source'] = 'Hinamizawa difficulty_rating'
+            chart.save()
         return chart
 
     def download_charts(self, params=None) -> list[Chart]:

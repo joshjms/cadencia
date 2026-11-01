@@ -32,7 +32,7 @@ def test_search_uses_get_and_documented_filters(tmp_path, monkeypatch):
     assert client.get_ranked_mania(params) == result
     request = requests[0]
     assert request.get_method() == "GET"
-    assert request.get_header("User-agent") == "cadencia/0.1.0"
+    assert request.get_header("User-agent") == "cadencia/1.0"
     assert urlsplit(request.full_url).path == "/v3/osu/beatmaps/search/v2"
     assert parse_qs(urlsplit(request.full_url).query) == {
         "query": ["artist & title"], "page": ["2"], "limit": ["25"],
@@ -206,3 +206,16 @@ def test_explicit_urls_are_validated_before_downloading(tmp_path, monkeypatch, p
     monkeypatch.setattr(urllib.request, "urlopen", lambda *args, **kwargs: pytest.fail("Network attempted"))
     with pytest.raises(ValueError):
         HinamizawaClient(data_dir=tmp_path).download_charts(params)
+
+
+def test_search_rating_is_retained_for_placement_training(tmp_path, package, monkeypatch):
+    result = ranked_set(4855704)
+    result['beatmaps'][0]['difficulty_rating'] = 3.75
+    def open_url(request, timeout):
+        return response({'beatmapsets':[result]}) if '/search/' in request.full_url else response(package.read_bytes())
+    monkeypatch.setattr(urllib.request,'urlopen',open_url)
+    client = HinamizawaClient(data_dir=tmp_path)
+    client.get_ranked_mania()
+    chart = client.download_charts({'urls':[LINK]})[0]
+    assert chart.metadata['star_rating'] == 3.75
+    assert load_chart(url=LINK,data_dir=tmp_path).metadata['star_rating'] == 3.75

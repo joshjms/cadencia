@@ -1,0 +1,16 @@
+{
+  "youtube_url": "https://youtu.be/kX1O93X77d4?list=RDcDS0yAInyZs",
+  "title": "Siapkah Kau 'Tuk Jatuh Cinta Lagi",
+  "artist": "HIVI!",
+  "author": "Cadencia",
+  "version": "4K Easy",
+  "difficulty": 1.5,
+  "output_dir": "data/exports/HIVI! - Siapkah Kau 'Tuk Jatuh Cinta Lagi",
+  "filename": "HIVI! - Siapkah Kau 'Tuk Jatuh Cinta Lagi",
+  "device": "cpu",
+  "seed": 42,
+  "beat_alignment": true,
+  "repeat_sections": false,
+  "constant_scroll": true,
+  "model_version": "v1"
+}

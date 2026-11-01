@@ -1,0 +1,123 @@
+{
+  "schema": "cadencia.model_release.v1",
+  "status": "released",
+  "version": "v1",
+  "created_at": "2026-11-01T15:43:21.945261+00:00",
+  "architecture": "MERT-v2 + 10ms mel + tracked beats + bar planner + phrase-trained interval decoder",
+  "encoder": {
+    "model_id": "m-a-p/MERT-v2-30s",
+    "revision": "0c0c8c6f6e04dcc39d96f94e0be9978a74848906",
+    "extraction_version": 4,
+    "layer": 24,
+    "core_seconds": 28.0,
+    "context_seconds": 1.0
+  },
+  "rhythm_backend": {
+    "backend": "beat-this",
+    "package_version": "1.0",
+    "checkpoint": "final0",
+    "checkpoint_sha256": "8c328b45f59d8dd3dff219253ff6a8d6482be57d0133a29140e2febbf8eb8331",
+    "postprocessor": "minimal",
+    "frame_hz": 50,
+    "cache_version": 1
+  },
+  "phrase_training": {
+    "beats": 4.0,
+    "weight": 0.05,
+    "empty_keep": 0.1,
+    "near_rows": 3,
+    "seed": 42,
+    "learning_rate": 5e-05,
+    "chunk_rows": 128,
+    "recipe": "mixed_phrases_v2",
+    "batch_rows": 128,
+    "warmup_epochs": 3,
+    "timing_normalization": "fixed original grid-row count",
+    "pattern_normalization": "all reference onsets in mixed batch",
+    "duration_normalization": "all reference hold starts in mixed batch",
+    "transition_normalization": "within-phrase transition-pair count",
+    "checkpoint_selection": "validation base_loss",
+    "objective": "event_bce + joint_pattern_ce + hold_duration_smooth_l1 + weighted_joint_transition_js",
+    "history": "causal teacher-forced reference history",
+    "gap_buckets_beats": [
+      0.5,
+      1.0
+    ],
+    "windows": "nonoverlapping annotated-beat windows, including partial intro/outro",
+    "gradient_checkpointing": true
+  },
+  "artifacts": {
+    "decoder": {
+      "path": "model_releases/v1/decoder.pt",
+      "sha256": "448bd7cfcb3f37b94e4efdb3315b436d2f8043051c141a8c8d7a6c4fbeba2e4a",
+      "format": "cadencia.placement.planned.v5",
+      "dataset_sha256": "9979576c6e85da767ecff9568e202b688da1e8cb73aea0e5d2fdecf1d8e453c7",
+      "weights": "last",
+      "weights_epoch": 20,
+      "source_checkpoint_sha256": "b100e37d7f2a060058d786f1467652d74e03b5901a9b9043dac25dc4f6764256"
+    },
+    "planner": {
+      "path": "model_releases/v1/planner.pt",
+      "sha256": "1d6e7f43b5025f839c5f568c114e5297ed5c30c9eeb17818b604daef26b6d7eb",
+      "format": "cadencia.bar_planner.v1",
+      "dataset_sha256": "9979576c6e85da767ecff9568e202b688da1e8cb73aea0e5d2fdecf1d8e453c7",
+      "best_epoch": 30,
+      "source_checkpoint_sha256": "52a1a2562a2da71881aaa33fc6708f666eb605468ccb1d987e6609a0c1f8e9d7"
+    },
+    "chart_pretraining": {
+      "path": "model_releases/v1/chart_pretraining.pt",
+      "sha256": "22e9ecad548398bd79459afe0376a83f951d1794e6b6dbbbab7daed6847d0501",
+      "format": "cadencia.chart_sequence.v1",
+      "dataset_sha256": "d8e3561543577b29fc7ad565c66e033999f29ee9574c691a1c7cbec1dd505149",
+      "best_epoch": 10,
+      "source_checkpoint_sha256": "24baeba9e8db0807d5fd8645fc093d18abaaf49a8e0b1863aca575d5153f1c03"
+    },
+    "alignment_prior": {
+      "path": "model_releases/v1/alignment_prior.json",
+      "sha256": "5ed9127526818080a83b588991df225a6ee386835c1d4a3965a3ac16c1efb057"
+    }
+  },
+  "notes": "Immutable inference weights; resume training from a separate .last.pt checkpoint.",
+  "validation": {
+    "timing": 0.0406379905560074,
+    "pattern": 1.9532037527090749,
+    "duration": 0.04263935741885907,
+    "phrase_transition": 0.6407933632995635,
+    "base_loss": 2.0364811006839414,
+    "loss": 2.0685207688489196,
+    "phrase_windows_with_transitions": 8407,
+    "phrase_transition_pairs": 49655,
+    "optimizer_steps": 0,
+    "phrase_weight": 0.05,
+    "rows": 1314778,
+    "per_action": [
+      {
+        "action": "empty",
+        "precision": 0.9934788438418929,
+        "recall": 0.9938977328476345,
+        "f1": 0.9936882441991294,
+        "support": 5177420
+      },
+      {
+        "action": "tap",
+        "precision": 0.5721287765159632,
+        "recall": 0.563480967580258,
+        "f1": 0.5677719449797328,
+        "support": 75818
+      },
+      {
+        "action": "hold_start",
+        "precision": 0.362828199297085,
+        "recall": 0.29877425944841673,
+        "f1": 0.32770049481841096,
+        "support": 5874
+      }
+    ],
+    "event": {
+      "precision": 0.8914323774801935,
+      "recall": 0.8710948204987667
+    },
+    "hold_duration_mae_beats": 0.6430101042697736,
+    "evaluation": "Teacher-forced full-grid validation; duration MAE at reference hold starts, not generated endpoint accuracy; annotated beat windows with differentiable joint-pattern transition JS"
+  }
+}

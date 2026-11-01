@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from cadencia.dataset import FEATURE_COLUMNS, _assign_splits, build_dataset, chart_samples, load_dataset
-from main import beat_dataset
+from scripts.main import beat_dataset
 
 
 def test_windows_labels_history_and_legacy_dataframe_agree(downloaded_chart):

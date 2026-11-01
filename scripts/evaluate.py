@@ -8,7 +8,10 @@ from sklearn.metrics import accuracy_score, average_precision_score, confusion_m
 from sklearn.metrics import precision_recall_fscore_support
 from torch.utils.data import DataLoader, TensorDataset
 
-from train import FEATURES, HitTransformer, load_data, predict
+if __package__:
+    from .train import FEATURES, HitTransformer, load_data, predict
+else:
+    from train import FEATURES, HitTransformer, load_data, predict
 
 
 def metrics(labels, probabilities, threshold):

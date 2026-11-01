@@ -1,0 +1,8 @@
+# Isolated official MERT-v2 runtime; do not install into an active training environment.
+-e .
+torch==2.6.0
+torchaudio==2.6.0
+transformers==4.53.2
+huggingface-hub
+safetensors
+rosu-pp-py==4.0.2

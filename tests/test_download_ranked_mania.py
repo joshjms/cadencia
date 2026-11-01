@@ -5,7 +5,7 @@ import pytest
 import soundfile as sf
 
 from cadencia.osumania import HinamizawaClient, MissingChartAudioError
-from download_ranked_mania import download_ranked_four_key
+from scripts.download_ranked_mania import download_ranked_four_key
 from conftest import LINK, ranked_set
 
 

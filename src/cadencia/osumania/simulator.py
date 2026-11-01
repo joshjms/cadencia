@@ -12,7 +12,6 @@ import webbrowser
 
 
 from ..audio import read_audio
-from .loader import data_root
 
 
 @dataclass(frozen=True)
@@ -35,10 +34,16 @@ class SimulatorConfig:
 from .generation import candidate_times, load_model
 
 
-def generate_chart(path, checkpoint_path):
+def generate_chart(path, checkpoint_path, *, difficulty=None, bpm=None):
     import soundfile as sf
 
-    result = load_model(checkpoint_path).predict(path)
+    model = load_model(checkpoint_path)
+    if hasattr(model, 'config'):
+        if difficulty is None:
+            raise ValueError('Four-lane generation requires a difficulty star-rating target')
+        result = model.predict(path, difficulty=difficulty, bpm=bpm)
+    else:
+        result = model.predict(path)
     samples, rate, _ = read_audio(path)
     sf.write(path.with_name("playback.wav"), samples, rate, subtype="PCM_16")
     return result
@@ -51,7 +56,8 @@ class Simulator:
         self.config = config or SimulatorConfig()
         if not isinstance(self.config, SimulatorConfig):
             raise TypeError("config must be a SimulatorConfig")
-        self.checkpoint = Path(checkpoint) if checkpoint else data_root(data_dir) / "ranked_hit_transformer.pt"
+        from ..model_versions import resolve_model_version
+        self.checkpoint = Path(checkpoint) if checkpoint else resolve_model_version()
         self._temporary = tempfile.TemporaryDirectory(prefix="cadencia-simulator-")
         self._root = Path(self._temporary.name)
         self._lock = threading.Lock()
@@ -95,9 +101,10 @@ class Simulator:
             self._worker.join()
         self._temporary.cleanup()
 
-    def _generate(self):
+    def _generate(self, difficulty=None, bpm=None):
         try:
-            result = generate_chart(self._root / "upload.mp3", self.checkpoint)
+            options = dict(difficulty=difficulty, bpm=bpm) if difficulty is not None else {}
+            result = generate_chart(self._root / "upload.mp3", self.checkpoint, **options)
             state = dict(status="ready", **result)
         except Exception as error:
             state = dict(status="error", error=f"{type(error).__name__}: {error}")
@@ -163,6 +170,18 @@ class Simulator:
                 if not simulator.checkpoint.is_file():
                     self.reply(400, {"error": f"Checkpoint not found: {simulator.checkpoint}"})
                     return
+                try:
+                    difficulty = self.headers.get('X-Cadencia-Difficulty')
+                    difficulty = float(difficulty) if difficulty is not None else None
+                    bpm = self.headers.get('X-Cadencia-Bpm')
+                    bpm = float(bpm) if bpm else None
+                    if difficulty is not None and (not math.isfinite(difficulty) or difficulty <= 0):
+                        raise ValueError('Difficulty must be a positive star rating')
+                    if bpm is not None and (not math.isfinite(bpm) or bpm <= 0):
+                        raise ValueError('BPM must be positive')
+                except ValueError as error:
+                    self.reply(400, {'error': str(error)})
+                    return
                 with simulator._lock:
                     if simulator._state["status"] == "processing":
                         self.reply(409, {"error": "A song is already processing"})
@@ -174,7 +193,7 @@ class Simulator:
                     if len(payload) != length:
                         raise ValueError("Incomplete upload")
                     (simulator._root / "upload.mp3").write_bytes(payload)
-                    simulator._worker = threading.Thread(target=simulator._generate, daemon=True)
+                    simulator._worker = threading.Thread(target=simulator._generate, args=(difficulty, bpm), daemon=True)
                     simulator._worker.start()
                 except Exception as error:
                     with simulator._lock:

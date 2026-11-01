@@ -1,0 +1,14 @@
+{
+  "youtube_url": "https://www.youtube.com/watch?v=2SUwOgmvzK4",
+  "title": "The Less I Know the Better",
+  "artist": "Tame Impala",
+  "author": "Cadencia",
+  "version": "4K Generated",
+  "difficulty": 2.0,
+  "model_version": "v1",
+  "output_dir": "../data/exports/example",
+  "device": "cpu",
+  "seed": 42,
+  "beat_alignment": true,
+  "constant_scroll": true
+}

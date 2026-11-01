@@ -26,7 +26,7 @@ def candidate_times(analysis):
 class ManiaModel:
     """A loaded CPU transformer with the preprocessing saved in its checkpoint."""
 
-    def __init__(self, path):
+    def __init__(self, path, *, checkpoint=None):
         from ..dataset import FEATURES
 
         try:
@@ -35,7 +35,7 @@ class ManiaModel:
         except ImportError as error:
             raise RuntimeError("Install inference dependencies with uv sync --extra training") from error
 
-        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        checkpoint = checkpoint if checkpoint is not None else torch.load(path, map_location="cpu", weights_only=True)
         if checkpoint.get("features") != FEATURES:
             raise ValueError("Checkpoint feature order does not match the model")
         mean = np.asarray(checkpoint["mean"], dtype=np.float32)
@@ -100,6 +100,18 @@ class ManiaModel:
         return out
 
 
-def load_model(path):
+def load_model(path="v1", *, device="cpu"):
     """Load a Cadencia transformer checkpoint once for repeated chart generation."""
-    return ManiaModel(path)
+    import torch
+
+    from ..model_versions import is_model_version, resolve_model_version
+    if is_model_version(str(path)):
+        path = resolve_model_version(str(path))
+    checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+    if checkpoint.get("format") in ("cadencia.placement.v1", "cadencia.placement.v2", "cadencia.placement.intervals.v3", "cadencia.placement.planned.v4", "cadencia.placement.planned.v5"):
+        from .placement_generation import PlacementModel
+
+        return PlacementModel(path, checkpoint=checkpoint, device=device)
+    if device != "cpu":
+        raise ValueError("Legacy tap checkpoints support CPU inference only")
+    return ManiaModel(path, checkpoint=checkpoint)

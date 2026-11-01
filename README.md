@@ -1,299 +1,223 @@
-# Cadencia
+# Cadencia v1
 
-A Python library for rhythm chart analysis with a shared `Chart` representation and a JavaScript timeline viewer. The first supported format is **four-key osu!mania**, with separate `Hit` and `Hold` events in lanes 0–3.
+Cadencia generates four-key osu!mania charts from music. It predicts **when an event happens, the complete four-lane tap/hold-start pattern, and hold lengths**. Charts can be played in a browser or exported to osu!.
 
-## Install and run
-
-Requires Python 3.12 or newer and [uv](https://docs.astral.sh/uv/).
-
-Download and preprocess 100 ranked four-key osu!mania charts:
+Requires Python 3.12+, [uv](https://docs.astral.sh/uv/), and FFmpeg on `PATH`.
 
 ```sh
-uv run download_ranked_mania.py
+uv sync --extra placement --extra download --group dev
 ```
 
-Or use the library interactively:
+The repository includes a small, hash-verified **v1 inference bundle** in `model_releases/v1/`. It contains an explicit snapshot of the latest completed phrase-training weights at publication, the planner, chart-pretraining weights, and alignment prior. The manifest records the selected epoch, validation measurements, and source checkpoint hash. The large frozen MERT and beat-tracker weights download separately on first use. The model cards describe their licenses and requirements: [MERT-v2-30s](https://huggingface.co/m-a-p/MERT-v2-30s), [Beat This!](https://github.com/CPJKU/beat_this).
+
+## Generate from a JSON file
+
+Copy `examples/chart.json` and fill in the song and chart metadata:
+
+```json
+{
+  "youtube_url": "https://www.youtube.com/watch?v=2SUwOgmvzK4",
+  "title": "The Less I Know the Better",
+  "artist": "Tame Impala",
+  "author": "Cadencia",
+  "version": "4K Generated",
+  "difficulty": 2.0,
+  "model_version": "v1",
+  "output_dir": "../data/exports/example",
+  "device": "cpu",
+  "seed": 42,
+  "beat_alignment": true,
+  "constant_scroll": true
+}
+```
+
+Paths are relative to the JSON file. Replace `youtube_url` with `audio_file` to use a local audio or music video file. Provide exactly one. `version` names the beatmap difficulty; `model_version` selects the trained model. Use `device: "cuda"` for GPU inference.
 
 ```sh
-uv sync
-uv run python
+./build_chart.sh examples/chart.json
+# With no argument, the wrapper uses data.json.
 ```
+
+The pipeline runs the existing scripts to produce an MP3, a self-contained `.cadencia` chart with audio, and an `.osz` archive. It preserves generated notes: difficulty is a conditioning target, not a guaranteed star rating. There is no automatic note thinning. Constant scroll changes exported timing points without moving or removing notes.
+
+Stages can be run separately. Existing outputs are never silently overwritten:
+
+```sh
+uv run scripts/build_chart.py examples/chart.json --stage audio
+uv run scripts/build_chart.py examples/chart.json --stage chart
+uv run scripts/build_chart.py examples/chart.json --stage export
+```
+
+Use `"checkpoint": "path/to/model.pt"` instead of `model_version` for custom weights.
+
+## Python API and playback
 
 ```python
-import cadencia
+from cadencia.osumania import Simulator, SimulatorConfig, load_model
 
-client = cadencia.osumania.HinamizawaClient()
-page = client.get_ranked_mania({"limit": 10, "page": 0})
+model = load_model("v1", device="cpu")
+model.create_chart("song.mp3", out="song.cadencia", difficulty=2.0, seed=42)
+Simulator("song.cadencia", port=6767, config=SimulatorConfig(), open_browser=False)
+```
+
+Open `http://localhost:6767`. The Simulator supports keyboard and touch play, configurable keybinds and tile speed, and fullscreen mode. It preloads the supplied chart and audio. Audio playback starts after user interaction.
+
+Generate from local audio/video or convert a saved chart using the CLI:
+
+```sh
+uv run scripts/music_to_osz.py song.mp4 --difficulty 2 --out data/exports/song.osz
+uv run scripts/convert_cadencia.py song.cadencia --out song.osz --constant-scroll
+uv run scripts/run_simulator.py --song song.mp3 --difficulty 2 --port 6767
+```
+
+`convert_cadencia.py --target-stars` is a separate, explicitly requested simplification option that can remove notes. It is not used by the JSON pipeline or ordinary generation. Calculator ratings may differ from the game's displayed rating.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    Audio[Song audio] --> MERT[Frozen MERT-v2-30s]
+    Audio --> Mel[10 ms mel spectrogram and trainable CNN]
+    Audio --> Rhythm[Frozen beat and downbeat tracker]
+    MERT --> Planner[Whole-song bar planner]
+    Rhythm --> Planner
+    Difficulty[Requested difficulty] --> Planner
+    MERT --> Decoder[Note decoder transformer]
+    Mel --> Decoder
+    Rhythm --> Decoder
+    Difficulty --> Decoder
+    History[Previous events and active holds] --> Decoder
+    Decoder --> Features[Combine query features with bar plan]
+    Planner --> Features
+    Features --> Timing[Event probability]
+    Features --> Pattern[Joint four-lane pattern]
+    Features --> Duration[Hold durations]
+```
+
+- **Audio:** frozen MERT-v2-30s produces 1,024-dimensional features at 25 Hz from overlapping audio chunks. The decoder reads two seconds of local features. A 64-band mel branch uses a 10 ms hop and a 101-frame local window, encoded by two temporal convolutions. Its usefulness relative to MERT alone still needs a controlled comparison.
+- **Rhythm:** the frozen, checksum-pinned Beat This! `final0` model supplies beat/downbeat activations and a tracked timeline. Six rhythm features include beat/downbeat activation, audio onset strength, bar phase, and bar confidence. Tempo can vary. Tracking errors and ambiguous bar boundaries remain possible; this is not a time-signature classifier.
+- **Planner:** a two-layer transformer looks across pooled audio/rhythm features for the song. For each bar it predicts rest probability, note heads per beat, chord fraction, and held-lane occupancy. It is trained separately, then frozen. Predicted plans guide the decoder; human plan targets are never decoder inputs.
+- **Decoder:** two transformer layers, four attention heads, width 128, approximately 0.8 million parameters including the local audio branch and output heads. Up to 64 previous event groups and the current query attend to local audio memory. Difficulty, local tempo, beat information, and active holds also condition predictions.
+- **Outputs:** event probability at every 10 ms step; one of 80 nonempty joint four-lane patterns; four hold-duration predictions in beats. Each lane can be empty, a tap, or a hold start. Hold releases are scheduled from duration and fed back into history. Occupancy constraints prevent same-lane conflicts.
+
+Generation uses its own accepted predictions as history. Optional post-generation beat alignment makes conservative timing adjustments, normally within 25 ms, using an empirical training-only phase prior plus acoustic onset evidence. Chords move together and hold durations are preserved. Alignment cannot fix large timing errors or guarantee the beat tracker is correct.
+
+Optional repeated-section reuse is available through `--repeat-sections --repeat-variation 0.2`. It matches similar eight-bar audio windows and transfers patterns with some bars retaining their original output. It is disabled by default and is not a learned chorus-reference input to the decoder.
+
+## Data
+
+The existing local corpus contains **1,001 ranked four-key charts**: 795 training, 99 validation, and 107 test charts. These are chart counts, not unique-song counts. Difficulties sharing a beatmapset or identical audio stay in the same split.
+
+The placement dataset stores:
+
+- A regular 100 Hz timeline with tap/hold-start labels for all four lanes, hold durations, active holds, and reference timing information.
+- Difficulty in osu!mania star ratings, not the `.osu` OverallDifficulty setting.
+- Shared frozen MERT features, local mel matrices, and audio-predicted rhythm sidecars.
+- Source identities, checksums, and split assignments for reproducible preprocessing.
+
+Original chart timing defines the training labels. Audio-predicted rhythm features condition the network, avoiding direct use of human chart timing as a substitute for beat tracking at inference.
+
+### Download and preprocess charts
+
+```sh
+uv run scripts/download_ranked_mania.py --count 100
+```
+
+The script selects individual ranked four-key difficulties and logs/skips chart-specific failures until the requested number succeeds. Reruns reuse cached charts and archives. The library itself does not silently filter key counts.
+
+```python
+from cadencia.osumania import HinamizawaClient, load_chart
+
+client = HinamizawaClient(data_dir="data")
+page = client.get_ranked_mania({"limit": 25, "page": 0})
 charts = client.download_charts({
     "urls": ["https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"]
 })
-chart = cadencia.osumania.load_chart(url=charts[0].metadata["source_url"])
-
-cadencia.osumania.visualize(port="8080")
+chart = load_chart(url=charts[0].metadata["source_url"])
 ```
 
-Open [the timeline](http://127.0.0.1:8080/). The server blocks until Ctrl+C. Audio playback, seeking, zooming and the event inspector share the same timeline.
+`load_chart` reads local preprocessed data immediately using exactly one of `name=` or `url=`. It never downloads and raises `FileNotFoundError` if missing. Missing standalone audio, including keysound-only maps, raises `MissingChartAudioError`. Audio decoding falls back from SoundFile to FFmpeg when needed.
 
-```python
-chart = cadencia.osumania.load_chart(
-    name=f"{chart.song.artist} - {chart.song.title} [{chart.metadata['difficulty']}]"
-)
-
-cadencia.osumania.visualize(
-    port="8080",
-    include=["lane0", "lane1", "waveform"],
-)
-```
-
-`load_chart` requires exactly one of `name=` or `url=` and immediately reads an existing local `trace.json`. It never downloads or recomputes features, and raises `FileNotFoundError` if no preprocessed chart exists, even when an original archive is present. Names match an exact song title or `Artist - Title [Difficulty]`, ignoring case. Ambiguous names raise `ValueError`; use the full name or URL to select a difficulty.
-
-## Ranked mania downloads
-
-`HinamizawaClient.get_ranked_mania(params)` makes a GET request to the mirror's [advanced search API](https://mirror.hinamizawa.ai/docs/beatmap-search), returning its JSON object with a `beatmapsets` array and nested `beatmaps` difficulties. It fixes `mode=3` and `status=ranked`, defaults to `explicit=show`, `sort=ranked_asc`, `limit=100`, and zero-based `page=0`. The ranked category includes legacy Approved maps. Search results include all mania key counts.
-
-`HinamizawaClient.download_charts(params)` accepts either an explicit `{"urls": [...]}` selection or the same search filters plus `count` (default 100). It downloads the selected charts' sets and runs chart and audio preprocessing, without silently skipping any key counts. Cadencia's parser still raises `ValueError` for unsupported charts. Four-key filtering and pagination for the 100-chart dataset live in `download_ranked_mania.py`: the script selects individual ranked four-key difficulties and passes their URLs to the client.
-
-The client counts cached charts toward the requested total, reuses their traces, and reuses downloaded set archives across calls on the same client. If only an archive exists, the client rebuilds its trace. Search exhaustion, download failures and preprocessing failures raise errors; already processed charts remain available for rerunning the batch. Requests retry HTTP 429 and 5xx responses up to three attempts, honoring `Retry-After` delays up to 60 seconds; longer delays are reported to the caller.
-
-```python
-client = cadencia.osumania.HinamizawaClient(data_dir="data")
-page = client.get_ranked_mania({"query": "Camellia", "limit": 25, "page": 0})
-# Select chart URLs from the search results before downloading.
-charts = client.download_charts({
-    "urls": ["https://osu.ppy.sh/beatmapsets/2043161#mania/4855704"]
-})
-```
-
-The script defaults to 100 charts and logs progress for each processed difficulty.
-
-Charts without a standalone song recording raise `cadencia.osumania.MissingChartAudioError`. For example, some maps use `AudioFilename: virtual` and construct their music from storyboard samples and keysounds, which Cadencia does not render. The script catches individual download and preprocessing failures, logs the chart URL, exception type and message, and continues until the requested number of charts has been successfully processed. Keyboard interrupts still stop the run, and catalogue request failures or search exhaustion remain fatal. Rerunning reuses already processed charts.
-
-Audio loading first uses SoundFile. If its decoder raises `LibsndfileError`, Cadencia tries the `ffmpeg` executable from `PATH`, decoding to a temporary float32 WAV at the original sample rate and channel count. This fallback is shared by preprocessing and `get_waveform`, preserves the original audio file, and records `audio_decoder` in the analysis metadata. Install FFmpeg to enable it; if both decoders fail, the script logs and skips that chart.
+### Build the placement dataset
 
 ```sh
-uv run download_ranked_mania.py
-uv run download_ranked_mania.py --count 10 --query Camellia --data-dir /path/to/data
+uv run scripts/make_placement_dataset.py --encoder mert-v2-30s \
+  --high-resolution --fetch-difficulties --device cuda \
+  --output data/placement_dataset_v1
 ```
 
-`uv run main.py --manifest links.json` builds a beat dataset from charts already preprocessed locally. Its manifest is a JSON array of objects containing `link` URLs.
+This reads existing `data/osumania/charts/*/trace.json` files, caches audio features, and requantizes original notes to the 10 ms grid. It does not redownload charts. Star ratings use explicit labels, checksum-bound cached values, a local calculator, or official metadata as available. Existing output datasets are not overwritten.
 
-## Dataset from local charts
+## Training
 
-Build a training dataset from every existing `data/osumania/charts/*/trace.json`:
+Training consists of chart-sequence pretraining, bar-planner training, audio-conditioned initialization, and phrase-window fine-tuning. GPU examples:
 
 ```sh
-uv run make_dataset.py
-uv run make_dataset.py --data-dir /path/to/data --output /path/to/new-dataset
+uv run scripts/pretrain_charts.py --data data/placement_dataset_v1 \
+  --device cuda --amp --epochs 10 --output data/chart_pretraining.pt
+uv run scripts/train_bar_planner.py --data data/placement_dataset_v1 \
+  --device cuda --epochs 50 --output data/bar_planner_v1.pt
+uv run scripts/train_intervals.py --data data/placement_dataset_v1 \
+  --planner data/bar_planner_v1.pt --chart-pretraining data/chart_pretraining.pt \
+  --device cuda --amp --epochs 50 --output data/audio_decoder_v1.pt
+uv run scripts/train_phrases.py --data data/placement_dataset_v1 \
+  --planner data/bar_planner_v1.pt --initialize data/audio_decoder_v1.pt \
+  --device cuda --amp --epochs 50 --output data/decoder_v1.pt
 ```
 
-This reads cached traces and their local audio without downloading maps or recomputing the original audio analysis. It resamples the existing descriptors and audio waveform for the dataset. Individual chart failures are logged and recorded in the manifest. The default output directory, `data/ranked_beat_dataset`, contains a `manifest.json` and one compressed `.npz` shard per chart. An existing dataset is never overwritten.
+Chart pretraining predicts the next onset's beat gap, joint pattern, and hold lengths without audio. Compatible history, attention, conditioning, pattern, and duration weights initialize the audio decoder; audio-facing layers start fresh. MERT and the trained planner stay frozen during audio training; the decoder and mel branch learn.
 
-Each row represents a candidate timestamp with the preceding two seconds sampled at 50 Hz: `X` has shape `(rows, 100, 20)` and float32 values, `y` is a binary tap label, and `time_s` stores the target timestamp. The channels are waveform, onset strength, RMS energy, spectral centroid, harmonic energy fraction, twelve chroma channels, candidate-onset counts, estimated-beat counts, and historical tap counts. Multiple taps at one timestamp produce one positive label; history retains their counts. Holds are excluded from the tap target. Samples before two seconds or outside the song duration are excluded, and the target tap never appears in its own history.
+Phrase training keeps whole four-beat windows and mixes windows until each batch has at least 128 sampled query rows. Every onset and nearby empty row is retained; 10% of distant empty rows are resampled. Timing is inverse-probability weighted over the fixed original grid size. Placement is averaged over onset groups, duration over hold starts, and phrase loss over within-window transitions. Phrase/chart boundaries never create artificial transitions.
 
-The builder preserves the existing `beat_dataset` candidate definition: the union of beat-grid timestamps rounded to milliseconds and known tap timestamps. This makes it a **conditional hit-classification baseline**; it does not evaluate discovering note times from audio alone. Audio descriptors use centered analysis windows, so this is also not a strictly causal streaming dataset. Undefined feature values remain `NaN`, for training-only imputation and normalization.
+The objective is timing BCE + joint-pattern cross-entropy + hold-duration Smooth L1 + up to **0.05 × phrase-transition JS divergence**, ramped up over three epochs. The last term compares expected versus human adjacent joint-pattern transitions in three beat-gap buckets. It is differentiable, but measures local transition statistics at known human onset positions rather than full generated-phrase quality. Hold endings retain their separate duration objective. `--phrase-weight 0` provides a matched batching control.
 
-The seeded split assigns approximately 80/10/10 percent of independent groups to training, validation and test. Difficulties sharing a beatmapset or byte-identical audio stay together, including transitive matches across sets. Fewer than three groups produces a train-only dataset. The manifest records feature order, parameters, source and shard checksums, per-chart membership, class counts, split assignments and skipped charts.
+Training uses human history; generation uses predicted history. Validation metrics therefore do not establish complete-chart playability. Phrase comparisons and playtesting complement per-note precision, recall, and F1.
 
-```python
-from cadencia.dataset import load_dataset
+### Checkpoints and resume
 
-frame, X, y = load_dataset("data/ranked_beat_dataset")
-print(X.shape, y.shape)
-train_mask = frame["split"].eq("train").to_numpy()
-```
+- `data/decoder_v1.pt`: protected best-validation inference weights, including the starting checkpoint if no epoch improves the shared base loss.
+- `data/decoder_v1.last.pt`: most recent completed epoch, including `last_model`, optimizer, scheduler, RNG, and training history.
+- `data/decoder_v1.metrics.json`: per-epoch training and validation measurements.
 
-`train.py` and `evaluate.py` accept this dataset directory or its `manifest.json`, and default to this path. Training uses the saved group splits and fits imputation and scaling on the training partition only. Evaluation resets predicted hit history separately for each test chart. Training dependencies are optional and are not needed to build the dataset:
+Files are replaced atomically after each epoch. They are rolling checkpoints, not one file per epoch. The generation loader uses `model`, so passing a training `.last.pt` still selects its protected best weights. Publish with `--weights last` to explicitly export the latest trained weights instead.
 
 ```sh
-uv run --extra training train.py
-uv run --extra training evaluate.py
+uv run scripts/train_phrases.py --data data/placement_dataset_v1 \
+  --planner data/bar_planner_v1.pt --resume data/decoder_v1.last.pt \
+  --output data/decoder_v1.pt --device cuda --amp --epochs 75
 ```
 
-To require CUDA and complete all 50 epochs, disable early stopping explicitly:
+`--epochs` is the total target. Initialization uses fresh optimizer state; resume restores it. Dataset, planner, configuration, sampling recipe, and prior must match.
+
+### Publish another model snapshot
+
+Published bundles are immutable. Choose a new release name:
 
 ```sh
-uv run --extra training train.py --device cuda --epochs 50 --patience 0
+uv run scripts/register_model_release.py v1.1.0 \
+  --decoder data/decoder_v1.last.pt --weights last \
+  --planner data/bar_planner_v1.pt --chart-pretraining data/chart_pretraining.pt
 ```
 
-The trainer saves the model with the best validation average precision and a `.metrics.json` file containing epoch timings, losses, validation scores and final test metrics. The default early-stopping patience remains seven epochs.
+The publisher checks component provenance, extracts the requested weights, excludes resumable state, and records hashes. Default `--weights best` exports the protected best checkpoint. Publishing is an explicit selection, not a claim that the selected epoch is objectively better.
 
-Both `include=["lane0", "lane1", "waveform"]` and `include=["lane0, lane1, waveform"]` work. Omitting `include` displays every layer. Available names:
+## Evaluation and analysis
 
-```python
-[
-    "lane0", "lane1", "lane2", "lane3",
-    "waveform", "onset_strength", "candidate_onsets", "rms_energy",
-    "spectral_centroid", "harmonic_energy_fraction", "chroma",
-    "estimated_beats", "timing",
-]
+```sh
+uv run scripts/evaluate_phrases.py --generated generated.cadencia \
+  --dataset data/placement_dataset_v1 --split test --out data/analysis/phrases.json
+uv run scripts/profile_beat_offsets.py --data data/placement_dataset_v1 \
+  --split train --out data/analysis/beat_offsets
 ```
 
-For notebooks or embedding, `visualize(block=False)` returns a running HTTP server. Call `server.shutdown()` and `server.server_close()` when finished. `port=0` selects an available port, exposed as `server.server_port`.
-
-## Chart and events
-
-`cadencia.Chart` contains the shared song, events and audio features. `cadencia.osumania.Chart` extends it with osu!mania loading and uses independent `cadencia.osumania.Event`, `Hit` and `Hold` types. Future game adapters can define their own event types against the shared chart representation.
-
-```python
-assert isinstance(chart, cadencia.Chart)
-
-song_path = chart.song.path
-lane_events = chart.lanes[0]
-all_events = chart.events
-
-for event in all_events:
-    if isinstance(event, cadencia.osumania.Hold):
-        print(event.lane, event.start_s, event.end_s, event.duration_s)
-```
-
-`chart.lanes` always has keys `0`, `1`, `2`, `3`, including empty lanes. `chart.events` returns all events in time order. Events retain their source line, object flags, source x coordinate and stable source ID. Simultaneous events stay separate. Holds use the explicit release time in the source file.
-
-Seven-key maps and other game modes raise `ValueError`. Unsupported or malformed objects are retained in `chart.raw_events` with diagnostics, and the metadata reports partial decoding. Events beyond the recording bounds retain their timestamps with `analysis_eligible=False`.
-
-## NumPy descriptors
-
-Pass a loaded chart to the top-level descriptor getters:
-
-```python
-import numpy as np
-
-onsets = cadencia.get_onset_strength(chart, sampling_rate=100)
-rms = cadencia.get_rms_energy(chart, sampling_rate=100)
-chroma = cadencia.get_chroma(chart, sampling_rate=100)
-waveform = cadencia.get_waveform(chart, sampling_rate=22050)
-
-times = np.arange(len(onsets)) / 100
-```
-
-`sampling_rate` is the number of output samples per second. Sample `k` represents `k / sampling_rate` seconds from audio zero, and every timestamp is strictly before the song duration. Getters using the same rate return the same number of samples. Positive fractional rates are supported.
-
-| Getter | Array shape | Default rate |
-| --- | --- | --- |
-| `get_waveform` | `(N,)`, mono audio amplitude | 22,050 Hz |
-| `get_onset_strength` | `(N,)` | 50 Hz |
-| `get_rms_energy` | `(N,)` | 50 Hz |
-| `get_spectral_centroid` | `(N,)` | 50 Hz |
-| `get_harmonic_energy_fraction` | `(N,)` | 50 Hz |
-| `get_chroma` | `(N, 12)`, columns C through B | 50 Hz |
-| `get_candidate_onsets` | `(N,)`, integer counts per bin | 50 Hz |
-| `get_estimated_beats` | `(N,)`, integer counts per bin | 50 Hz |
-
-Continuous descriptors use linear interpolation of cached feature values and hold the endpoint value beyond the last cached frame. A higher output rate interpolates the original 50 Hz analysis; it does not increase its measurement resolution. Undefined centroid and harmonic-fraction values remain `np.nan`, including interpolation intervals touching them. The original cached values and units are preserved.
-
-`get_waveform` reads the original audio, averages channels and resamples with `soxr_hq` antialiasing. It returns audio samples; `chart.waveform` remains the min/max envelope used by the visualizer.
-
-Candidate onsets and estimated beats are discrete event trains. Output bin `k` counts events in `[k / sampling_rate, (k + 1) / sampling_rate)`, clipped to the recording duration. Counts can exceed one at low rates. They are not interpolated into continuous curves, and candidate counts do not encode onset strength.
-
-## Cache and provenance
-
-The example creates:
-
-```text
-data/osumania/charts/4855704/
-    archive.osz
-    chart.osu
-    song.mp3
-    download.json
-    trace.json
-```
-
-`archive.osz` is the original beatmap set. `chart.osu` is the selected difficulty, and `song.<extension>` preserves its associated audio bytes. The trace stores the song filename, metadata, four event lanes, every feature series, timing points, source records and diagnostics. `chart.trace_path`, `chart.to_dict()` and `chart.save()` expose this representation. `cadencia.osumania.Chart.read(path)` reads an existing trace.
-
-Downloads use the [Hinamizawa public beatmap mirror](https://mirror.hinamizawa.ai/docs/beatmap-download). The provider, requested URL, resolved URL and download time are recorded. SHA-256 hashes identify the archive, selected chart and song. Only the requested chart and its associated song are analyzed. Downloads and analysis are staged before a new cache becomes visible.
-
-The default data directory is `data/` relative to the current working directory. Set `CADENCIA_DATA_DIR`, or pass `data_dir="/path/to/data"` to `HinamizawaClient`, `load_chart` and `visualize`, to choose another location. Cached media are ignored by version control.
-
-## Audio features and timing
-
-All event and feature times are seconds relative to the original audio start. Object times are divided by 1,000; no lead-in or calibration shift is applied. Source tempo and meter come from uninherited timing points. Inherited scroll controls remain context and do not change event times or BPM. See the [osu! file format](https://osu.ppy.sh/wiki/en/Client/File_formats/osu_%28file_format%29).
-
-The original audio is retained for playback. Analysis averages channels to mono and resamples to 22,050 Hz with `soxr_hq`. Centered 2,048-sample windows advance by 441 samples (20 ms), with zero padding at the boundaries. Analysis settings and library versions are recorded in `chart.metadata["analysis"]`.
-
-| Attribute | Representation |
-| --- | --- |
-| `song` | Local audio path, title, artist, duration, native sample rate/channels and hash |
-| `waveform` | Minimum and maximum amplitude in each 20 ms bin; timestamps mark bin starts |
-| `onset_strength` | Librosa positive log-mel spectral flux; a measure of changing spectral energy |
-| `candidate_onsets` | Local peaks in the onset envelope, with their original strengths |
-| `rms_energy` | Root-mean-square amplitude in rectangular windows, in linear full-scale units |
-| `spectral_centroid` | Magnitude-weighted spectral center in Hz; null for silent frames |
-| `harmonic_energy_fraction` | Squared HPSS harmonic magnitude divided by total squared magnitude; null for silent frames |
-| `chroma` | Twelve harmonic pitch-class values per frame, C through B, normalized to the frame maximum |
-| `estimated_beats` | Beat times estimated independently from the audio onset envelope |
-
-Feature series expose `.times`, `.values`, `.unit` and optional `.labels`. Frame timestamps mark window centers. Waveform bins expose `.times`, `.minimum`, `.maximum` and `.bin_width_s`.
-
-Candidate detection divides flux by its per-song 99th percentile and clips to [0, 1]. Peak parameters are `pre_max=3`, `post_max=3`, `pre_avg=10`, `post_avg=10`, `delta=0.07`, `wait=3`, without backtracking. The trace retains raw flux. The harmonic fraction is an HPSS mixture proxy; candidate onsets and estimated beats are audio estimates, not chart labels. The viewer scales flux and RMS by their displayed per-song maxima and shows those maxima.
+Phrase evaluation compares rhythm, chord/hold, and lane patterns over several beat-window lengths. Corpus resemblance is not same-song accuracy. `--paired` uses a matching human chart's timeline; the recording identity must be checked separately. Keep test data reserved for final reporting, and use validation data to choose model changes.
 
 ## Development
 
-```sh
-uv run pytest
-uv build
-```
-
-The viewer ships inside the Python package and needs no frontend build or Node installation. Tests cover parsing, explicit holds, source timing, feature extraction, cache reuse, failed imports, lane filtering, HTTP assets and byte-range audio playback.
-
-## Generate a reusable chart artifact
-
-```python
-import cadencia
-
-model = cadencia.osumania.load_model("data/ranked_hit_transformer.pt")
-chart_file = model.create_chart("song.mp3", out="generated/song.cadencia")
-
-config = cadencia.osumania.SimulatorConfig(
-    keybinds=("KeyD", "KeyF", "KeyJ", "KeyK"), tile_speed=420,
-)
-cadencia.osumania.Simulator(chart_file, port=8080, config=config)
-```
-
-`load_model` loads the transformer and its normalization once; reuse it to create
-multiple charts. `create_chart` returns the output `Path` and refuses to overwrite
-an existing file. The `.cadencia` artifact is a ZIP containing a versioned
-`chart.json` manifest and `audio.wav`, with first-lane notes, prediction
-probabilities, generation settings, model checksum and audio checksum. It is a
-Cadencia simulator format, not an osu! beatmap archive.
-
-Move or share the single artifact to play it later. `Simulator(CHART_FILE, ...)`
-verifies its contents and opens the chart ready to play without regenerating
-notes, needing the original MP3, or loading PyTorch. Chart playback still uses
-the base Cadencia dependencies. Creating charts requires `uv sync --extra training`.
-
-## Browser simulator
-
-Run the first-lane transformer preview with the existing trained checkpoint:
+All command-line scripts live in `scripts/`. Data, feature caches, generated charts, and live training checkpoints stay under ignored `data/`. The released v1 inference bundle is tracked separately so a clone contains the exact generation weights.
 
 ```sh
-uv sync --extra training
-uv run --extra training python -c 'from cadencia.osumania import Simulator; Simulator(port=8080)'
+uv run pytest -q
 ```
 
-Open the printed localhost URL (a browser opens automatically), choose an MP3,
-then click **Generate notes** and **Play**. Use D on the first lane; the default
-four bindings are D/F/J/K. The browser supports rebinding, tile speed adjustment,
-pause, restart, autoplay, scoring, combo and miss counts. Tile speed changes
-scrolling in pixels per second; it does not change the song playback rate.
-
-```python
-from cadencia.osumania import Simulator, SimulatorConfig
-
-Simulator(
-    port=8080,
-    config=SimulatorConfig(keybinds=("KeyA", "KeyS", "KeyK", "KeyL"), tile_speed=500),
-    checkpoint="data/ranked_hit_transformer.pt",
-)
-```
-
-Bindings use browser `KeyboardEvent.code` names. For a notebook, pass
-`block=False`, keep the returned instance and call `simulator.close()` to stop.
-The server binds to loopback only. Uploaded audio and prepared playback files
-are temporary and removed when the simulator closes. Uploads are limited to
-100 MiB; inference runs on CPU and reports individual song failures in the UI.
-
-All generated notes are taps on lane one. Candidates come from estimated beats,
-beat midpoints and detected onsets, without existing chart timestamps. The
-transformer uses its own accepted predictions as history, with at least 80 ms
-between taps. The first two seconds supply history and contain no generated
-notes. This differs from training's candidates, which included known tap times;
-held-out dataset scores do not measure arbitrary-song generation quality.
+The low-level `Chart`, local loader, timeline viewer, audio analysis, and earlier checkpoint-format readers remain available. Experimental baseline training tools are retained in `scripts/`; the workflow above is the supported v1 path.
