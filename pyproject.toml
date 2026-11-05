@@ -54,5 +54,5 @@ url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu124" }
-torchaudio = { index = "pytorch-cu124" }
+torch = { index = "pytorch-cu124", marker = "sys_platform != 'darwin'" }
+torchaudio = { index = "pytorch-cu124", marker = "sys_platform != 'darwin'" }
